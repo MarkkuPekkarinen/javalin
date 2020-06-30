@@ -14,7 +14,7 @@ Javalin is more of a library than a framework. Some key points:
 * There is no other magic; just code.
 
 General information:
-* The project webpage is [javalin.io](https://javalin.io).
+* The project webpage is [javalin.io](https://javalin.io) (repo for webpage is at [github.com/javalin/javalin.github.io](https://github.com/javalin/javalin.github.io)).
 * Documentation: [javalin.io/documentation](https://javalin.io/documentation)
 * Chat: https://gitter.im/javalin-io/general
 * Contributions are very welcome: [CONTRIBUTING.md](https://github.com/tipsy/javalin/blob/master/CONTRIBUTING.md)
@@ -31,14 +31,14 @@ General information:
 <dependency>
     <groupId>io.javalin</groupId>
     <artifactId>javalin</artifactId>
-    <version>3.6.0</version>
+    <version>3.9.1</version>
 </dependency>
 ```
 
 #### Gradle
 
 ```groovy
-compile "io.javalin:javalin:3.6.0"
+compile "io.javalin:javalin:3.9.1"
 ```
 
 ### Start programming (Java)
