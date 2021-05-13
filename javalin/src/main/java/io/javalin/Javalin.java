@@ -19,6 +19,7 @@ import io.javalin.core.event.JavalinEvent;
 import io.javalin.core.event.WsHandlerMetaInfo;
 import io.javalin.core.security.AccessManager;
 import io.javalin.core.security.Role;
+import io.javalin.core.util.JavalinLogger;
 import io.javalin.core.util.Util;
 import io.javalin.http.Context;
 import io.javalin.http.ErrorMapperKt;
@@ -29,21 +30,17 @@ import io.javalin.http.JavalinServlet;
 import io.javalin.http.sse.SseClient;
 import io.javalin.http.sse.SseHandler;
 import io.javalin.websocket.JavalinWsServlet;
+import io.javalin.websocket.WsConfig;
 import io.javalin.websocket.WsExceptionHandler;
-import io.javalin.websocket.WsHandler;
 import io.javalin.websocket.WsHandlerType;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.function.Consumer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 @SuppressWarnings("unchecked")
 public class Javalin {
-
-    public static Logger log = LoggerFactory.getLogger(Javalin.class);
 
     /**
      * Do not use this field unless you know what you're doing.
@@ -73,7 +70,8 @@ public class Javalin {
      * @see Javalin#create(Consumer)
      */
     public static Javalin create() {
-        return create(JavalinConfig.noopConfig);
+        return create(config -> {
+        });
     }
 
     /**
@@ -102,7 +100,8 @@ public class Javalin {
 
     // Create a standalone (non-jetty dependent) Javalin
     public static Javalin createStandalone() {
-        return createStandalone(JavalinConfig.noopConfig);
+        return createStandalone(config -> {
+        });
     }
 
     // Get JavalinServlet (for use in standalone mode)
@@ -171,12 +170,12 @@ public class Javalin {
         Util.printHelpfulMessageIfLoggerIsMissing();
         eventManager.fireEvent(JavalinEvent.SERVER_STARTING);
         try {
-            Javalin.log.info("Starting Javalin ...");
+            JavalinLogger.info("Starting Javalin ...");
             server.start(wsServlet);
-            Javalin.log.info("Javalin started in " + (System.currentTimeMillis() - startupTimer) + "ms \\o/");
+            JavalinLogger.info("Javalin started in " + (System.currentTimeMillis() - startupTimer) + "ms \\o/");
             eventManager.fireEvent(JavalinEvent.SERVER_STARTED);
         } catch (Exception e) {
-            Javalin.log.error("Failed to start Javalin");
+            JavalinLogger.error("Failed to start Javalin");
             eventManager.fireEvent(JavalinEvent.SERVER_START_FAILED);
             if (Boolean.TRUE.equals(server.server().getAttribute("is-default-server"))) {
                 stop();// stop if server is default server; otherwise, the caller is responsible to stop
@@ -197,14 +196,14 @@ public class Javalin {
      * @return stopped application instance.
      */
     public Javalin stop() {
-        log.info("Stopping Javalin ...");
+        JavalinLogger.info("Stopping Javalin ...");
         eventManager.fireEvent(JavalinEvent.SERVER_STOPPING);
         try {
             server.server().stop();
         } catch (Exception e) {
-            log.error("Javalin failed to stop gracefully", e);
+            JavalinLogger.error("Javalin failed to stop gracefully", e);
         }
-        log.info("Javalin has stopped");
+        JavalinLogger.info("Javalin has stopped");
         eventManager.fireEvent(JavalinEvent.SERVER_STOPPED);
         return this;
     }
@@ -229,7 +228,7 @@ public class Javalin {
      * Ex: app.attribute(MyExt.class, myExtInstance())
      * The method must be called before {@link Javalin#start()}.
      */
-    public Javalin attribute(Class clazz, Object obj) {
+    public Javalin attribute(Class<?> clazz, Object obj) {
         config.inner.appAttributes.put(clazz, obj);
         return this;
     }
@@ -253,8 +252,11 @@ public class Javalin {
      */
     public Javalin routes(@NotNull EndpointGroup endpointGroup) {
         ApiBuilder.setStaticJavalin(this);
-        endpointGroup.addEndpoints();
-        ApiBuilder.clearStaticJavalin();
+        try {
+            endpointGroup.addEndpoints();
+        } finally {
+            ApiBuilder.clearStaticJavalin();
+        }
         return this;
     }
 
@@ -302,6 +304,12 @@ public class Javalin {
      * @see <a href="https://javalin.io/documentation#handlers">Handlers in docs</a>
      */
     public Javalin addHandler(@NotNull HandlerType handlerType, @NotNull String path, @NotNull Handler handler, @NotNull Set<Role> roles) {
+        if (Util.isNonSubPathWildcard(path)) { // TODO: This should probably be made part of the actual path matching
+            // split into two handlers: one exact, and one sub-path with wildcard
+            String basePath = path.substring(0, path.length() - 1);
+            addHandler(handlerType, basePath, handler, roles);
+            return addHandler(handlerType, basePath + "/*", handler, roles);
+        }
         servlet.addHandler(handlerType, path, handler, roles);
         eventManager.fireHandlerAddedEvent(new HandlerMetaInfo(handlerType, Util.prefixContextPath(servlet.getConfig().contextPath, path), handler, roles));
         return this;
@@ -538,17 +546,17 @@ public class Javalin {
      * Adds a specific WebSocket handler for the given path to the instance.
      * Requires an access manager to be set on the instance.
      */
-    private Javalin addWsHandler(@NotNull WsHandlerType handlerType, @NotNull String path, @NotNull Consumer<WsHandler> wsHandler, @NotNull Set<Role> roles) {
-        wsServlet.addHandler(handlerType, path, wsHandler, roles);
-        eventManager.fireWsHandlerAddedEvent(new WsHandlerMetaInfo(handlerType, Util.prefixContextPath(servlet.getConfig().contextPath, path), wsHandler, roles));
+    private Javalin addWsHandler(@NotNull WsHandlerType handlerType, @NotNull String path, @NotNull Consumer<WsConfig> wsConfig, @NotNull Set<Role> roles) {
+        wsServlet.addHandler(handlerType, path, wsConfig, roles);
+        eventManager.fireWsHandlerAddedEvent(new WsHandlerMetaInfo(handlerType, Util.prefixContextPath(servlet.getConfig().contextPath, path), wsConfig, roles));
         return this;
     }
 
     /**
      * Adds a specific WebSocket handler for the given path to the instance.
      */
-    private Javalin addWsHandler(@NotNull WsHandlerType handlerType, @NotNull String path, @NotNull Consumer<WsHandler> wsHandler) {
-        return addWsHandler(handlerType, path, wsHandler, new HashSet<>());
+    private Javalin addWsHandler(@NotNull WsHandlerType handlerType, @NotNull String path, @NotNull Consumer<WsConfig> wsConfig) {
+        return addWsHandler(handlerType, path, wsConfig, new HashSet<>());
     }
 
     /**
@@ -556,7 +564,7 @@ public class Javalin {
      *
      * @see <a href="https://javalin.io/documentation#websockets">WebSockets in docs</a>
      */
-    public Javalin ws(@NotNull String path, @NotNull Consumer<WsHandler> ws) {
+    public Javalin ws(@NotNull String path, @NotNull Consumer<WsConfig> ws) {
         return ws(path, ws, new HashSet<>());
     }
 
@@ -567,36 +575,36 @@ public class Javalin {
      * @see AccessManager
      * @see <a href="https://javalin.io/documentation#websockets">WebSockets in docs</a>
      */
-    public Javalin ws(@NotNull String path, @NotNull Consumer<WsHandler> ws, @NotNull Set<Role> permittedRoles) {
+    public Javalin ws(@NotNull String path, @NotNull Consumer<WsConfig> ws, @NotNull Set<Role> permittedRoles) {
         return addWsHandler(WsHandlerType.WEBSOCKET, path, ws, permittedRoles);
     }
 
     /**
      * Adds a WebSocket before handler for the specified path to the instance.
      */
-    public Javalin wsBefore(@NotNull String path, @NotNull Consumer<WsHandler> wsHandler) {
-        return addWsHandler(WsHandlerType.WS_BEFORE, path, wsHandler);
+    public Javalin wsBefore(@NotNull String path, @NotNull Consumer<WsConfig> wsConfig) {
+        return addWsHandler(WsHandlerType.WS_BEFORE, path, wsConfig);
     }
 
     /**
      * Adds a WebSocket before handler for all routes in the instance.
      */
-    public Javalin wsBefore(@NotNull Consumer<WsHandler> wsHandler) {
-        return wsBefore("*", wsHandler);
+    public Javalin wsBefore(@NotNull Consumer<WsConfig> wsConfig) {
+        return wsBefore("*", wsConfig);
     }
 
     /**
      * Adds a WebSocket after handler for the specified path to the instance.
      */
-    public Javalin wsAfter(@NotNull String path, @NotNull Consumer<WsHandler> wsHandler) {
-        return addWsHandler(WsHandlerType.WS_AFTER, path, wsHandler);
+    public Javalin wsAfter(@NotNull String path, @NotNull Consumer<WsConfig> wsConfig) {
+        return addWsHandler(WsHandlerType.WS_AFTER, path, wsConfig);
     }
 
     /**
      * Adds a WebSocket after handler for all routes in the instance.
      */
-    public Javalin wsAfter(@NotNull Consumer<WsHandler> wsHandler) {
-        return wsAfter("*", wsHandler);
+    public Javalin wsAfter(@NotNull Consumer<WsConfig> wsConfig) {
+        return wsAfter("*", wsConfig);
     }
 
 }

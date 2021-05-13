@@ -3,7 +3,7 @@
     <parent>
         <artifactId>javalin-parent</artifactId>
         <groupId>io.javalin</groupId>
-        <version>3.9.2-SNAPSHOT</version>
+        <version>4.0.0.ALPHA2-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -82,7 +82,17 @@
             <optional>true</optional>
         </dependency>
         <dependency>
-            <groupId>com.atlassian.commonmark</groupId>
+            <groupId>gg.jte</groupId>
+            <artifactId>jte</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>gg.jte</groupId>
+            <artifactId>jte-kotlin</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.commonmark</groupId>
             <artifactId>commonmark</artifactId>
             <optional>true</optional>
         </dependency>

@@ -38,6 +38,7 @@ import io.swagger.v3.oas.models.OpenAPI
 import io.swagger.v3.oas.models.info.Info
 import io.swagger.v3.oas.models.security.SecurityRequirement
 import io.swagger.v3.oas.models.security.SecurityScheme
+import io.swagger.v3.oas.models.servers.Server
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatExceptionOfType
 import org.junit.Test
@@ -45,9 +46,14 @@ import java.time.Instant
 
 class Address(val street: String, val number: Int)
 
-class User(val name: String, val address: Address? = null)
+class User(val name: String, val address: Address? = null, val userType: UserType? = null)
 
 class Log(val timestamp: Instant, val message: String)
+
+enum class UserType{
+    ONE, TWO
+}
+
 
 fun createComplexExampleBaseConfiguration() = openapiDsl {
     info {
@@ -254,6 +260,10 @@ fun buildComplexExample(options: OpenApiOptions): Javalin {
     app.get("/resources/*", documented(getResourcesDocumentation) {})
 
     app.get("/ignored", documented(document().ignore()) {})
+
+    app.get("/enums/:my-enum-path-param", documented(document()
+            .pathParam<UserType>("my-enum-path-param")
+            .queryParam<UserType>("my-enum-query-param")) {})
 
     return app
 }
@@ -580,6 +590,62 @@ class TestOpenApi {
             val actual = http.jsonGet("/docs/swagger.json").body
 
             assertThat(actual).isEqualTo(provideRouteExampleJson)
+        }
+    }
+
+    @Test
+    fun `openApiOptions provides a way to add context dependent information to the schema`() {
+        val modifier = object : OpenApiModelModifier {
+            override fun apply(ctx: Context, model: OpenAPI): OpenAPI = model.servers(listOf(Server().url("http://example.example.com")))
+        }
+        TestUtil.test(Javalin.create {
+            it.registerPlugin(OpenApiPlugin(OpenApiOptions {
+                OpenAPI().info(Info().apply {
+                    title = "Example"
+                    version = "1.0.0"
+                })
+            }.path("/docs/swagger.json")
+            .responseModifier(modifier)
+            ))
+        }) { app, http ->
+            app.get("/test") {}
+
+            val actual = http.jsonGet("/docs/swagger.json").body
+
+            assertThat(actual).isEqualTo(serverListingAddedExample)
+        }
+    }
+
+    @Test
+    fun `openApiOptions allows user to choose between using cached and uncached OpenAPI model`() {
+        val modifier = object : OpenApiModelModifier {
+            override fun apply(ctx: Context, model: OpenAPI): OpenAPI {
+                val servers = model.servers ?: ArrayList()
+                servers.add(Server().url("http://example.example.com"))
+                model.servers(servers)
+                return model
+            }
+        }
+        TestUtil.test(Javalin.create {
+            it.registerPlugin(OpenApiPlugin(OpenApiOptions {
+                OpenAPI().info(Info().apply {
+                    title = "Example"
+                    version = "1.0.0"
+                })
+            }.path("/docs/swagger.json")
+            .responseModifier(modifier)
+            .disableCaching()
+            ))
+        }) { app, http ->
+            app.get("/test") {}
+
+            var actual = http.jsonGet("/docs/swagger.json").body
+
+            assertThat(actual).withFailMessage("First request").isEqualTo(serverListingAddedExample)
+
+            actual = http.jsonGet("/docs/swagger.json").body
+
+            assertThat(actual).withFailMessage("Second request").isEqualTo(serverListingAddedExample)
         }
     }
 

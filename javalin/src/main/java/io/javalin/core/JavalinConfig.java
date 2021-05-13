@@ -18,6 +18,7 @@ import io.javalin.core.plugin.PluginNotFoundException;
 import io.javalin.core.security.AccessManager;
 import io.javalin.core.security.SecurityUtil;
 import io.javalin.core.util.CorsPlugin;
+import io.javalin.core.util.Header;
 import io.javalin.core.util.LogUtil;
 import io.javalin.http.Handler;
 import io.javalin.http.RequestLogger;
@@ -26,7 +27,7 @@ import io.javalin.http.staticfiles.JettyResourceHandler;
 import io.javalin.http.staticfiles.Location;
 import io.javalin.http.staticfiles.ResourceHandler;
 import io.javalin.http.staticfiles.StaticFileConfig;
-import io.javalin.websocket.WsHandler;
+import io.javalin.websocket.WsConfig;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -42,24 +43,21 @@ import org.jetbrains.annotations.Nullable;
 
 public class JavalinConfig {
     // @formatter:off
-    public static Consumer<JavalinConfig> noopConfig = JavalinConfig -> {}; // no change from default
-    //Left here for backwards compatibility only. Please use CompressionStrategy instead
-    @Deprecated public boolean dynamicGzip = true;
     public boolean autogenerateEtags = false;
     public boolean prefer405over404 = false;
     public boolean enforceSsl = false;
-    public boolean precompressStaticFiles = false;
     public boolean showJavalinBanner = true;
     public boolean logIfServerNotStarted = true;
+    public boolean ignoreTrailingSlashes = true;
     @NotNull public String defaultContentType = "text/plain";
     @NotNull public String contextPath = "/";
-    @NotNull public Long requestCacheSize = 4096L;
+    public Long maxRequestSize = 1_000_000L; // server will not accept payloads larger than 1mb by default
     @NotNull public Long asyncRequestTimeout = 0L;
     @NotNull public Inner inner = new Inner();
 
     // it's not bad to access this, the main reason it's hidden
     // is to provide a cleaner API with dedicated setters
-    public class Inner {
+    public static class Inner {
         @NotNull public Map<Class<? extends Plugin>, Plugin> plugins = new HashMap<>();
         @NotNull public Map<Class<?>, Object> appAttributes = new HashMap<>();
         @Nullable public RequestLogger requestLogger = null;
@@ -68,7 +66,7 @@ public class JavalinConfig {
         @NotNull public SinglePageHandler singlePageHandler = new SinglePageHandler();
         @Nullable public SessionHandler sessionHandler = null;
         @Nullable public Consumer<WebSocketServletFactory> wsFactoryConfig = null;
-        @Nullable public WsHandler wsLogger = null;
+        @Nullable public WsConfig wsLogger = null;
         @Nullable public Server server = null;
         @Nullable public Consumer<ServletContextHandler> servletContextHandlerConsumer = null;
         @NotNull public CompressionStrategy compressionStrategy = CompressionStrategy.GZIP;
@@ -104,37 +102,42 @@ public class JavalinConfig {
     }
 
     public JavalinConfig enableWebjars() {
-        return addStaticFiles("/webjars", Location.CLASSPATH);
+        return addStaticFiles(staticFiles -> {
+            staticFiles.directory = "META-INF/resources/webjars";
+            staticFiles.headers.put(Header.CACHE_CONTROL, "max-age=31622400");
+        });
     }
 
-    public JavalinConfig addStaticFiles(@NotNull String classpathPath) {
-        return addStaticFiles(classpathPath, Location.CLASSPATH);
+    public JavalinConfig addStaticFiles(@NotNull String directory, @NotNull Location location) {
+        return addStaticFiles(staticFiles -> {
+            staticFiles.directory = directory;
+            staticFiles.location = location;
+        });
     }
 
-    public JavalinConfig addStaticFiles(@NotNull String path, @NotNull Location location) {
-        return addStaticFiles("/", path, location);
-    }
-
-    public JavalinConfig addStaticFiles(@NotNull String urlPathPrefix, @NotNull String path, @NotNull Location location) {
+    public JavalinConfig addStaticFiles(@NotNull Consumer<StaticFileConfig> userConfig) {
         JettyUtil.disableJettyLogger();
-        if (inner.resourceHandler == null)
-            inner.resourceHandler = new JettyResourceHandler(precompressStaticFiles);
-        inner.resourceHandler.addStaticFileConfig(new StaticFileConfig(urlPathPrefix, path, location));
+        if (inner.resourceHandler == null) {
+            inner.resourceHandler = new JettyResourceHandler();
+        }
+        StaticFileConfig finalConfig = new StaticFileConfig();
+        userConfig.accept(finalConfig);
+        inner.resourceHandler.addStaticFileConfig(finalConfig);
         return this;
     }
 
-    public JavalinConfig addSinglePageRoot(@NotNull String path, @NotNull String filePath) {
-        addSinglePageRoot(path, filePath, Location.CLASSPATH);
+    public JavalinConfig addSinglePageRoot(@NotNull String hostedPath, @NotNull String filePath) {
+        addSinglePageRoot(hostedPath, filePath, Location.CLASSPATH);
         return this;
     }
 
-    public JavalinConfig addSinglePageRoot(@NotNull String path, @NotNull String filePath, @NotNull Location location) {
-        inner.singlePageHandler.add(path, filePath, location);
+    public JavalinConfig addSinglePageRoot(@NotNull String hostedPath, @NotNull String filePath, @NotNull Location location) {
+        inner.singlePageHandler.add(hostedPath, filePath, location);
         return this;
     }
 
-    public JavalinConfig addSinglePageHandler(@NotNull String path, @NotNull Handler customHandler) {
-        inner.singlePageHandler.add(path, customHandler);
+    public JavalinConfig addSinglePageHandler(@NotNull String hostedPath, @NotNull Handler customHandler) {
+        inner.singlePageHandler.add(hostedPath, customHandler);
         return this;
     }
 
@@ -169,8 +172,8 @@ public class JavalinConfig {
         return this;
     }
 
-    public JavalinConfig wsLogger(@NotNull Consumer<WsHandler> ws) {
-        WsHandler logger = new WsHandler();
+    public JavalinConfig wsLogger(@NotNull Consumer<WsConfig> ws) {
+        WsConfig logger = new WsConfig();
         ws.accept(logger);
         inner.wsLogger = logger;
         return this;
@@ -198,11 +201,6 @@ public class JavalinConfig {
 
     public static void applyUserConfig(Javalin app, JavalinConfig config, Consumer<JavalinConfig> userConfig) {
         userConfig.accept(config); // apply user config to the default config
-
-        //Backwards compatibility. If deprecated dynamicGzip flag is set to false, disable compression.
-        if (!config.dynamicGzip) {
-            config.inner.compressionStrategy = CompressionStrategy.NONE;
-        }
 
         AtomicBoolean anyHandlerAdded = new AtomicBoolean(false);
         app.events(listener -> {

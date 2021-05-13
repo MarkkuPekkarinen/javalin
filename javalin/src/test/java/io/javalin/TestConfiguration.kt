@@ -27,13 +27,12 @@ class TestConfiguration {
             // JavalinServlet
             it.addSinglePageRoot("/", "/public/html.html")
             it.addSinglePageRoot("/", "src/test/resources/public/html.html", Location.EXTERNAL)
-            it.addStaticFiles("/public")
+            it.addStaticFiles("/public", Location.CLASSPATH)
             it.addStaticFiles("src/test/resources/public", Location.EXTERNAL)
             it.asyncRequestTimeout = 10_000L
             it.autogenerateEtags = true
             it.contextPath = "/"
             it.defaultContentType = "text/plain"
-            it.dynamicGzip = true
             it.enableCorsForAllOrigins()
             it.enableDevLogging()
             it.registerPlugin(RouteOverviewPlugin("/test", roles()))
@@ -41,7 +40,6 @@ class TestConfiguration {
             it.enforceSsl = true
             it.logIfServerNotStarted = false
             it.prefer405over404 = false
-            it.requestCacheSize = 8192L
             it.requestLogger { ctx, executionTimeMs -> }
             it.sessionHandler { SessionHandler() }
             // WsServlet
@@ -82,14 +80,5 @@ class TestConfiguration {
         }
         assertThat(app.config.inner.compressionStrategy.gzip?.level).isEqualTo(2)
         assertThat(app.config.inner.compressionStrategy.brotli).isNull()
-    }
-
-    @Test
-    fun `compression strategy gets disabled when dynamicGzip is set to false`() {
-        val app = Javalin.create {
-            it.dynamicGzip = false
-            it.compressionStrategy(null, Gzip(8))
-        }
-        assertThat(app.config.inner.compressionStrategy).isEqualTo(CompressionStrategy.NONE)
     }
 }

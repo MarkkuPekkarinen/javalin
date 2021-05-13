@@ -12,6 +12,9 @@ import io.javalin.core.validation.JavalinValidation
 import io.javalin.core.validation.Validator
 import io.javalin.core.validation.collectErrors
 import io.javalin.http.BadRequestResponse
+import io.javalin.http.context.formParam
+import io.javalin.http.context.pathParam
+import io.javalin.http.context.queryParam
 import io.javalin.plugin.json.JavalinJson
 import io.javalin.testing.SerializeableObject
 import io.javalin.testing.TestUtil
@@ -190,7 +193,7 @@ class TestValidation {
         app.get("/") { ctx ->
             val numberValidator = ctx.queryParam<Int>("number")
                     .check({ it > 12 }, "must be greater than 12.")
-                    .check({ it.rem(2) == 0}, "must be even.")
+                    .check({ it.rem(2) == 0 }, "must be even.")
 
             val stringValidator = ctx.queryParam<String>("first_name")
                     .check({ !it.contains("-") }, "cannot contain hyphens.")

@@ -8,9 +8,13 @@ package io.javalin.http.util
 
 import io.javalin.core.security.BasicAuthCredentials
 import io.javalin.core.util.Header
+import io.javalin.core.util.JavalinLogger
 import io.javalin.http.Context
 import io.javalin.http.HandlerEntry
 import io.javalin.http.HandlerType
+import io.javalin.http.HttpResponseException
+import org.eclipse.jetty.http.HttpStatus
+import java.net.URL
 import java.net.URLDecoder
 import java.util.*
 import javax.servlet.http.HttpServletRequest
@@ -25,6 +29,7 @@ object ContextUtil {
         if (handlerType != HandlerType.AFTER) {
             endpointHandlerPath = handlerEntry.path
         }
+        splatList = handlerEntry.extractSplats(requestUri)
     }
 
     // this header is semi-colon separated, like: "text/html; charset=UTF-8"
@@ -67,18 +72,34 @@ object ContextUtil {
             matchedPath: String = "*",
             pathParamMap: Map<String, String> = mapOf(),
             handlerType: HandlerType = HandlerType.INVALID,
-            appAttributes: Map<Class<*>, Any> = mapOf()
+            appAttributes: Map<Class<*>, Any> = mapOf(),
+            splatList: List<String> = listOf()
     ) = Context(request, response, appAttributes).apply {
         this.matchedPath = matchedPath
         this.pathParamMap = pathParamMap
         this.handlerType = handlerType
+        this.splatList = splatList
     }
 
-    fun Context.isLocalhost() = this.host()?.contains("localhost") == true || this.host()?.contains("127.0.0.1") == true
+    fun Context.isLocalhost() = try {
+        URL(this.url()).host.let { it == "localhost" || it == "127.0.0.1" }
+    } catch (e: Exception) {
+        false
+    }
 
     fun changeBaseRequest(ctx: Context, req: HttpServletRequest) = Context(req, ctx.res).apply {
         this.pathParamMap = ctx.pathParamMap
         this.matchedPath = ctx.matchedPath
     }
+
+    fun Context.throwPayloadTooLargeIfPayloadTooLarge() {
+        val maxRequestSize = this.attribute<Long>(maxRequestSizeKey)!!
+        if (this.req.contentLength > maxRequestSize) {
+            JavalinLogger.warn("Body greater than max size ($maxRequestSize bytes)")
+            throw HttpResponseException(HttpStatus.PAYLOAD_TOO_LARGE_413, "Payload too large")
+        }
+    }
+
+    const val maxRequestSizeKey = "javalin-max-request-size"
 
 }

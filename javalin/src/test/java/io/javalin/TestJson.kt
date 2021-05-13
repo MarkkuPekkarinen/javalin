@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.SerializationFeature
 import com.google.gson.GsonBuilder
 import com.mashape.unirest.http.Unirest
+import io.javalin.http.context.body
 import io.javalin.plugin.json.FromJsonMapper
 import io.javalin.plugin.json.JavalinJackson
 import io.javalin.plugin.json.JavalinJson
@@ -55,7 +56,7 @@ class TestJson {
                 |    "title": "Internal server error",
                 |    "status": 500,
                 |    "type": "https://javalin.io/documentation#internalservererrorresponse",
-                |    "details": []
+                |    "details": {}
                 |}""".trimMargin())
     }
 
@@ -129,6 +130,18 @@ class TestJson {
         val mappedBack = JavalinJson.fromJson(mapped, SerializeableObject::class.java)
         assertThat(SerializeableObject().value1).isEqualTo(mappedBack.value1)
         assertThat(SerializeableObject().value2).isEqualTo(mappedBack.value2)
+    }
+
+    data class SerializeableDataClass(val value1: String, val value2: String)
+
+    @Test
+    fun `can use JavalinJson with a custom object-mapper on a kotlin data class`() {
+        val jacksonKtEnabledObjectMapper = JavalinJackson.defaultObjectMapper()
+        JavalinJackson.configure(jacksonKtEnabledObjectMapper) // override mapper
+        val mapped = JavalinJson.toJson(SerializeableDataClass("First value", "Second value"))
+        val mappedBack = JavalinJson.fromJson(mapped, SerializeableDataClass::class.java)
+        assertThat("First value").isEqualTo(mappedBack.value1)
+        assertThat("Second value").isEqualTo(mappedBack.value2)
     }
 
 }

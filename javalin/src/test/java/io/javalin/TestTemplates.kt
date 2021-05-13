@@ -9,8 +9,11 @@ package io.javalin
 
 import com.mitchellbosecke.pebble.PebbleEngine
 import com.mitchellbosecke.pebble.loader.ClasspathLoader
-import io.javalin.plugin.rendering.FileRenderer
+import gg.jte.ContentType
+import gg.jte.TemplateEngine
+import io.javalin.jte.PrecompileJteTestClasses
 import io.javalin.plugin.rendering.JavalinRenderer
+import io.javalin.plugin.rendering.template.JavalinJte
 import io.javalin.plugin.rendering.template.JavalinJtwig
 import io.javalin.plugin.rendering.template.JavalinPebble
 import io.javalin.plugin.rendering.template.JavalinVelocity
@@ -30,6 +33,8 @@ class TestTemplates {
         setProperty("resource.loader", "class")
         setProperty("class.resource.loader.class", "org.apache.velocity.runtime.resource.loader.ClasspathResourceLoader")
     }
+
+    private val defaultBaseModel = model("foo", "bar")
 
     @Test
     fun `velocity templates work`() = TestUtil.test { app, http ->
@@ -138,6 +143,34 @@ class TestTemplates {
     }
 
     @Test
+    fun `jte works`() = TestUtil.test { app, http ->
+        JavalinJte.configure(TemplateEngine.createPrecompiled(null, ContentType.Html, null, PrecompileJteTestClasses.PACKAGE_NAME))
+        app.get("/hello") { ctx -> ctx.render("test.jte", model("page", JteTestPage("hello", "world"))) }
+        assertThat(http.getBody("/hello")).isEqualToIgnoringNewLines("<h1>hello world!</h1>")
+    }
+
+    @Test
+    fun `jte multiple params work`() = TestUtil.test { app, http ->
+        JavalinJte.configure(TemplateEngine.createPrecompiled(null, ContentType.Html, null, PrecompileJteTestClasses.PACKAGE_NAME))
+        app.get("/hello") { ctx -> ctx.render("multiple-params.jte", model("one", "hello", "two", "world")) }
+        assertThat(http.getBody("/hello")).isEqualToIgnoringNewLines("<h1>hello world!</h1>")
+    }
+
+    @Test
+    fun `jte kotlin works`() = TestUtil.test { app, http ->
+        JavalinJte.configure(TemplateEngine.createPrecompiled(null, ContentType.Html, null, PrecompileJteTestClasses.PACKAGE_NAME))
+        app.get("/hello") { ctx -> ctx.render("kte/test.kte", model("page", JteTestPage("hello", "world"))) }
+        assertThat(http.getBody("/hello")).isEqualToIgnoringNewLines("<h1>hello world!</h1>")
+    }
+
+    @Test
+    fun `jte kotlin multiple params work`() = TestUtil.test { app, http ->
+        JavalinJte.configure(TemplateEngine.createPrecompiled(null, ContentType.Html, null, PrecompileJteTestClasses.PACKAGE_NAME))
+        app.get("/hello") { ctx -> ctx.render("kte/multiple-params.kte", model("one", "hello", "two", "world")) }
+        assertThat(http.getBody("/hello")).isEqualToIgnoringNewLines("<h1>hello world!</h1>")
+    }
+
+    @Test
     fun `markdown works`() = TestUtil.test { app, http ->
         app.get("/hello") { ctx -> ctx.render("/markdown/test.md") }
         assertThat(http.getBody("/hello")).isEqualTo("<h1>Hello Markdown!</h1>\n")
@@ -151,15 +184,9 @@ class TestTemplates {
 
     @Test
     fun `registering custom renderer works`() = TestUtil.test { app, http ->
-        JavalinRenderer.register(FileRenderer { _, _, _ -> "Hah." }, ".lol")
+        JavalinRenderer.register({ _, _, _ -> "Hah." }, ".lol")
         app.get("/hello") { ctx -> ctx.render("/markdown/test.lol") }
         assertThat(http.getBody("/hello")).isEqualTo("Hah.")
-    }
-
-    @Test
-    fun `double extension works`() = TestUtil.test { app, http ->
-        app.get("/hello") { ctx -> ctx.render("/templates/jtwig/test.html.twig", model("message", "Hello jTwig!")) }
-        assertThat(http.getBody("/hello")).isEqualTo("<h1>Hello jTwig!</h1>")
     }
 
     @Test
@@ -167,4 +194,20 @@ class TestTemplates {
         app.get("/hello") { ctx -> ctx.render("/templates/jtwig/multiple.dots.twig", model("message", "Hello jTwig!")) }
         assertThat(http.getBody("/hello")).isEqualTo("<h1>Hello jTwig!</h1>")
     }
+
+    @Test
+    fun `base Model works`() = TestUtil.test { app, http ->
+        JavalinRenderer.baseModelFunction = { ctx -> defaultBaseModel + mapOf("queryParams" to ctx.queryParamMap(), "pathParams" to ctx.pathParamMap()) }
+        app.get("/hello/:pp") { ctx -> ctx.render("/templates/freemarker/test-with-base.ftl", model("message", "Hello Freemarker!")) }
+        assertThat(http.getBody("/hello/world?im=good")).isEqualTo("<h1>good</h1><h2>world</h2><h3>bar</h3>")
+    }
+
+    @Test
+    fun `base model overwrite works`() = TestUtil.test { app, http ->
+        JavalinRenderer.baseModelFunction = { ctx -> defaultBaseModel + mapOf("queryParams" to ctx.queryParamMap(), "pathParams" to ctx.pathParamMap()) }
+        app.get("/hello/:pp") { ctx -> ctx.render("/templates/freemarker/test-with-base.ftl", model("foo", "baz")) }
+        assertThat(http.getBody("/hello/world?im=good")).isEqualTo("<h1>good</h1><h2>world</h2><h3>baz</h3>")
+    }
+
+    data class JteTestPage(val hello: String, val world: String)
 }

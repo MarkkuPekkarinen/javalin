@@ -17,7 +17,7 @@
 
     <groupId>io.javalin</groupId>
     <artifactId>javalin-parent</artifactId>
-    <version>3.9.2-SNAPSHOT</version>
+    <version>4.0.0.ALPHA2-SNAPSHOT</version>
 
     <name>Javalin (parent)</name>
     <description>Javalin: Simple REST APIs for Java and Kotlin</description>
@@ -50,48 +50,51 @@
         <java.version>1.8</java.version>
 
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <kotlin.version>1.3.71</kotlin.version>
+        <kotlin.version>1.4.30</kotlin.version>
         <kotlin.compiler.jvmTarget>1.6</kotlin.compiler.jvmTarget> <!-- This is 1.6 on purpose, don't bump -->
         <kotlin.compiler.incremental>true</kotlin.compiler.incremental>
 
         <!-- PLUGINS -->
         <compiler.plugin.version>3.8.1</compiler.plugin.version>
-        <dokka.plugin.version>0.10.0</dokka.plugin.version>
+        <dokka.plugin.version>1.4.10.2</dokka.plugin.version>
         <gpg.plugin.version>1.6</gpg.plugin.version>
         <jar.plugin.version>3.2.0</jar.plugin.version>
-        <surefire.plugin.version>2.22.2</surefire.plugin.version>
+        <surefire.plugin.version>3.0.0-M5</surefire.plugin.version>
 
         <!-- DEPENDENCIES -->
-        <classgraph.version>4.8.66</classgraph.version>
-        <commonmark.version>0.14.0</commonmark.version>
+        <classgraph.version>4.8.102</classgraph.version>
+        <commonmark.version>0.17.1</commonmark.version>
         <freemarker.version>2.3.30</freemarker.version>
-        <guava.version>28.2-jre</guava.version>
-        <jackson.version>2.10.3</jackson.version>
-        <jetty.version>9.4.30.v20200611</jetty.version>
+        <guava.version>30.1-jre</guava.version>
+        <jackson.version>2.12.1</jackson.version>
+        <jetty.version>9.4.40.v20210413</jetty.version>
         <jtwig.version>5.87.0.RELEASE</jtwig.version>
         <jvmbrotli.version>0.2.0</jvmbrotli.version>
         <logback.version>1.2.3</logback.version>
-        <micrometer.version>1.5.1</micrometer.version>
-        <mustache.version>0.9.6</mustache.version>
-        <pebble.version>3.1.2</pebble.version>
-        <redoc.version>2.0.0-rc.23</redoc.version>
+        <micrometer.version>1.6.3</micrometer.version>
+        <mustache.version>0.9.7</mustache.version>
+        <pebble.version>3.1.5</pebble.version>
+        <redoc.version>2.0.0-rc.45</redoc.version>
         <slf4j.version>1.7.30</slf4j.version>
-        <swagger.models.version>2.1.2</swagger.models.version>
-        <swagger.parser.version>2.0.19</swagger.parser.version>
-        <swagger.ui.version>3.25.2</swagger.ui.version>
-        <thymeleaf.version>3.0.11.RELEASE</thymeleaf.version>
+        <swagger.core.version>2.1.6</swagger.core.version>
+        <swagger.parser.version>2.0.24</swagger.parser.version>
+        <swagger.ui.version>3.43.0</swagger.ui.version>
+        <thymeleaf.version>3.0.12.RELEASE</thymeleaf.version>
         <velocity.version>2.2</velocity.version>
+        <jte.version>1.10.0</jte.version>
 
         <!-- TEST DEPENDENCIES -->
         <assertj.version>3.15.0</assertj.version>
-        <common.io.version>2.6</common.io.version>
+        <common.io.version>2.7</common.io.version>
         <gson.version>2.8.6</gson.version>
         <java.websocket.version>1.5.0</java.websocket.version>
         <javax.servlet.api.version>3.1.0</javax.servlet.api.version>
         <junit.benchmark.version>0.7.2</junit.benchmark.version>
-        <junit.version>4.13</junit.version>
-        <kotlin.openapi.dsl.version>0.20.2</kotlin.openapi.dsl.version>
-        <mockk.version>1.9.3.kotlin12</mockk.version>
+        <junit.version>4.13.1</junit.version>
+        <kotlin.openapi.dsl.version>1.0.0</kotlin.openapi.dsl.version>
+        <mockk.version>1.10.0</mockk.version>
+        <bytebuddy.version>1.10.22</bytebuddy.version>
+        <bytebuddyagent.version>1.10.22</bytebuddyagent.version>
         <okhttp.version>3.14.7</okhttp.version>
         <selenium.chrome.driver.version>3.141.59</selenium.chrome.driver.version>
         <unirest.version>1.4.9</unirest.version>
@@ -199,7 +202,17 @@
                 <version>${pebble.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.atlassian.commonmark</groupId>
+                <groupId>gg.jte</groupId>
+                <artifactId>jte</artifactId>
+                <version>${jte.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>gg.jte</groupId>
+                <artifactId>jte-kotlin</artifactId>
+                <version>${jte.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.commonmark</groupId>
                 <artifactId>commonmark</artifactId>
                 <version>${commonmark.version}</version>
             </dependency>
@@ -210,8 +223,13 @@
             </dependency>
             <dependency>
                 <groupId>io.swagger.core.v3</groupId>
+                <artifactId>swagger-core</artifactId>
+                <version>${swagger.core.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.swagger.core.v3</groupId>
                 <artifactId>swagger-models</artifactId>
-                <version>${swagger.models.version}</version>
+                <version>${swagger.core.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.swagger.parser.v3</groupId>
@@ -299,6 +317,16 @@
                 <version>${mockk.version}</version>
             </dependency>
             <dependency>
+                <groupId>net.bytebuddy</groupId>
+                <artifactId>byte-buddy-agent</artifactId>
+                <version>${bytebuddyagent.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.bytebuddy</groupId>
+                <artifactId>byte-buddy</artifactId>
+                <version>${bytebuddy.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>org.seleniumhq.selenium</groupId>
                 <artifactId>selenium-chrome-driver</artifactId>
                 <version>${selenium.chrome.driver.version}</version>
@@ -320,14 +348,6 @@
             </dependency>
         </dependencies>
     </dependencyManagement>
-
-    <pluginRepositories>
-        <pluginRepository>
-            <id>jcenter</id>
-            <name>JCenter</name>
-            <url>https://jcenter.bintray.com/</url>
-        </pluginRepository>
-    </pluginRepositories>
 
     <build>
         <plugins>

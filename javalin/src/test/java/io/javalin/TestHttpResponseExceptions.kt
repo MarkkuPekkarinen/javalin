@@ -54,7 +54,7 @@ class TestHttpResponseExceptions {
                 |    "title": "Off limits!",
                 |    "status": 403,
                 |    "type": "https://javalin.io/documentation#forbiddenresponse",
-                |    "details": []
+                |    "details": {}
                 |}""".trimMargin()
         )
     }
@@ -70,7 +70,7 @@ class TestHttpResponseExceptions {
                 |    "title": "",
                 |    "status": 418,
                 |    "type": "https://javalin.io/documentation#error-responses",
-                |    "details": []
+                |    "details": {}
                 |}""".trimMargin()
         )
     }
@@ -104,7 +104,7 @@ class TestHttpResponseExceptions {
             val future = CompletableFuture<String>()
             Executors.newSingleThreadScheduledExecutor().schedule({
                 future.completeExceptionally(UnauthorizedResponse())
-            }, 10, TimeUnit.MILLISECONDS)
+            }, 0, TimeUnit.MILLISECONDS)
             return future
         }
         app.get("/completed-future-route") { ctx -> ctx.result(getExceptionallyCompletingFuture()) }
@@ -131,7 +131,7 @@ class TestHttpResponseExceptions {
             val future = CompletableFuture<String>()
             Executors.newSingleThreadScheduledExecutor().schedule({
                 future.completeExceptionally(IllegalStateException("Unexpected message"))
-            }, 10, TimeUnit.MILLISECONDS)
+            }, 0, TimeUnit.MILLISECONDS)
             return future
         }
         app.get("/completed-future-route") { ctx -> ctx.result(getUnexpectedExceptionallyCompletingFuture()) }
@@ -149,7 +149,7 @@ class TestHttpResponseExceptions {
                 |    "title": "Forbidden",
                 |    "status": 403,
                 |    "type": "https://javalin.io/documentation#forbiddenresponse",
-                |    "details": []
+                |    "details": {}
                 |}""".trimMargin()
         )
     }
@@ -162,9 +162,30 @@ class TestHttpResponseExceptions {
                 |    "title": "Off limits!",
                 |    "status": 403,
                 |    "type": "https://javalin.io/documentation#forbiddenresponse",
-                |    "details": []
+                |    "details": {}
                 |}""".trimMargin()
         )
         assertThat(http.htmlGet("/").body).isEqualTo("Only mapped for HTML")
     }
+
+    @Test
+    fun `can override HttpResponseExceptions`() = TestUtil.test { app, http ->
+        val randomNumberString = (Math.random() * 10000).toString()
+        app.get("/") { throw BadRequestResponse() }
+        app.exception(BadRequestResponse::class.java) { e, ctx -> ctx.result(randomNumberString) }
+        assertThat(http.getBody("/")).isEqualTo(randomNumberString)
+    }
+
+    @Test
+    fun `details are displayed as a map in json`() = TestUtil.test { app, http ->
+        app.get("/") { throw ForbiddenResponse("Off limits!", mapOf("a" to "A", "b" to "B")) }
+        assertThat(http.jsonGet("/").body).isEqualTo("""{
+                |    "title": "Off limits!",
+                |    "status": 403,
+                |    "type": "https://javalin.io/documentation#forbiddenresponse",
+                |    "details": {"a":"A","b":"B"}
+                |}""".trimMargin()
+        )
+    }
+
 }

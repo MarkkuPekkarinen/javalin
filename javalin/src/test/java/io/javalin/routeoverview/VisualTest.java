@@ -11,10 +11,11 @@ import io.javalin.core.util.RouteOverviewPlugin;
 import io.javalin.http.Context;
 import io.javalin.http.Handler;
 import io.javalin.http.HandlerType;
-import io.javalin.websocket.WsHandler;
+import io.javalin.websocket.WsConfig;
 import static io.javalin.TestAccessManager.MyRoles.ROLE_ONE;
 import static io.javalin.TestAccessManager.MyRoles.ROLE_THREE;
 import static io.javalin.TestAccessManager.MyRoles.ROLE_TWO;
+import static io.javalin.apibuilder.ApiBuilder.crud;
 import static io.javalin.apibuilder.ApiBuilder.delete;
 import static io.javalin.apibuilder.ApiBuilder.get;
 import static io.javalin.apibuilder.ApiBuilder.patch;
@@ -69,11 +70,12 @@ public class VisualTest {
                     delete(new HandlerImplementation());
                 });
             });
+            crud("/movies/:movie-id", new CrudHandlerImpl());
         });
     }
 
-    private static void wsMethodRef(WsHandler wsHandler) {
-        wsHandler.onConnect(ctx -> ctx.session.getRemote().sendString("Connected!"));
+    private static void wsMethodRef(WsConfig wsConfig) {
+        wsConfig.onConnect(ctx -> ctx.session.getRemote().sendString("Connected!"));
     }
 
     private static void methodReference(Context context) {
