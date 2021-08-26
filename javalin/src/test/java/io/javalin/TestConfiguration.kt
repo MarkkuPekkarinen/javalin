@@ -8,10 +8,12 @@ package io.javalin
 
 import io.javalin.core.compression.CompressionStrategy
 import io.javalin.core.compression.Gzip
-import io.javalin.core.security.SecurityUtil.roles
 import io.javalin.core.util.RouteOverviewPlugin
+import io.javalin.http.ContentType
 import io.javalin.http.staticfiles.Location
 import io.javalin.plugin.metrics.MicrometerPlugin
+import io.javalin.testing.TestUtil
+import org.assertj.core.api.Assertions
 import org.assertj.core.api.Assertions.assertThat
 import org.eclipse.jetty.server.Server
 import org.eclipse.jetty.server.session.SessionHandler
@@ -27,31 +29,31 @@ class TestConfiguration {
             // JavalinServlet
             it.addSinglePageRoot("/", "/public/html.html")
             it.addSinglePageRoot("/", "src/test/resources/public/html.html", Location.EXTERNAL)
+            it.addSinglePageHandler("/", {})
             it.addStaticFiles("/public", Location.CLASSPATH)
             it.addStaticFiles("src/test/resources/public", Location.EXTERNAL)
             it.asyncRequestTimeout = 10_000L
             it.autogenerateEtags = true
             it.contextPath = "/"
-            it.defaultContentType = "text/plain"
+            it.defaultContentType = ContentType.PLAIN
             it.enableCorsForAllOrigins()
             it.enableDevLogging()
-            it.registerPlugin(RouteOverviewPlugin("/test", roles()))
+            it.registerPlugin(RouteOverviewPlugin("/test"))
             it.enableWebjars()
             it.enforceSsl = true
-            it.logIfServerNotStarted = false
             it.prefer405over404 = false
-            it.requestLogger { ctx, executionTimeMs -> }
+            it.requestLogger { ctx, timeInMs -> }
             it.sessionHandler { SessionHandler() }
             // WsServlet
-            it.wsFactoryConfig { }
-            it.wsLogger { }
+            it.wsFactoryConfig { factory -> }
+            it.wsLogger { ws ->  }
             // Server
             it.server {
                 Server()
             }
             it.registerPlugin(MicrometerPlugin())
             // Misc
-            it.accessManager { handler, ctx, permittedRoles -> }
+            it.accessManager { _, _, _ -> }
             it.showJavalinBanner = false
             it.configureServletContextHandler { handler ->
                 handler.addEventListener(object : HttpSessionListener {
@@ -63,14 +65,14 @@ class TestConfiguration {
                 })
             }
         }.start(0)
-        assertThat(app.server.started).isTrue()
+        assertThat(app.jettyServer.started).isTrue()
         app.stop()
     }
 
     @Test
-    fun `compression strategy with default config is correct`() {
+    fun `compression strategy is set to gzip by default`() {
         val app = Javalin.create()
-        assertThat(app.config.inner.compressionStrategy).isEqualTo(CompressionStrategy.GZIP)
+        assertThat(app._conf.inner.compressionStrategy).isEqualTo(CompressionStrategy.GZIP)
     }
 
     @Test
@@ -78,7 +80,14 @@ class TestConfiguration {
         val app = Javalin.create {
             it.compressionStrategy(null, Gzip(2))
         }
-        assertThat(app.config.inner.compressionStrategy.gzip?.level).isEqualTo(2)
-        assertThat(app.config.inner.compressionStrategy.brotli).isNull()
+        assertThat(app._conf.inner.compressionStrategy.gzip?.level).isEqualTo(2)
+        assertThat(app._conf.inner.compressionStrategy.brotli).isNull()
+    }
+
+    @Test
+    fun `app throws exception saying port is busy if it is`() = TestUtil.test { app, _ ->
+        Assertions.assertThatExceptionOfType(RuntimeException::class.java)
+            .isThrownBy { Javalin.create().start(app.port()) }
+            .withMessageContaining("Port already in use. Make sure no other process is using port ${app.port()} and try again")
     }
 }

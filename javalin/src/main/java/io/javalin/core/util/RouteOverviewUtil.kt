@@ -10,15 +10,16 @@ import io.javalin.Javalin
 import io.javalin.apibuilder.CrudFunctionHandler
 import io.javalin.core.event.HandlerMetaInfo
 import io.javalin.core.event.WsHandlerMetaInfo
-import io.javalin.core.security.Role
+import io.javalin.core.security.RouteRole
 import io.javalin.http.Context
 import io.javalin.http.Handler
 import io.javalin.plugin.openapi.annotations.ContentType
 import io.javalin.plugin.openapi.annotations.OpenApi
 import io.javalin.plugin.openapi.annotations.OpenApiContent
 import io.javalin.plugin.openapi.annotations.OpenApiResponse
+import java.util.*
 
-data class RouteOverviewConfig(val path: String, val roles: Set<Role>)
+data class RouteOverviewConfig(val path: String, val roles: Set<RouteRole>)
 
 class RouteOverviewRenderer(val app: Javalin) : Handler {
 
@@ -37,8 +38,8 @@ class RouteOverviewRenderer(val app: Javalin) : Handler {
             ]
     )
     override fun handle(ctx: Context) {
-        if (ctx.header(Header.ACCEPT)?.toLowerCase()?.contains("application/json") == true) {
-            ctx.header("Content-Type", "application/json")
+        if (ctx.header(Header.ACCEPT)?.lowercase(Locale.ROOT)?.contains(ContentType.JSON) == true) {
+            ctx.header("Content-Type", ContentType.JSON)
             ctx.result(RouteOverviewUtil.createJsonOverview(handlerMetaInfoList, wsHandlerMetaInfoList))
         } else {
             ctx.html(RouteOverviewUtil.createHtmlOverview(handlerMetaInfoList, wsHandlerMetaInfoList))
@@ -228,14 +229,18 @@ object RouteOverviewUtil {
     val Any.metaInfo: String
         get() {
             // this is just guesswork...
+            // every new version of Java or Kotlin seems to break something here
             return when {
                 isClass -> (this as Class<*>).name + ".class"
                 isCrudFunction -> "ApiBuilder#crud::${(this as CrudFunctionHandler).function.value}"
                 isKotlinMethodReference -> {
-                    val f = this.javaClass.getDeclaredField("function")
-                            .apply { isAccessible = true }
-                            .get(this)
-                    f.runMethod("getOwner").runMethod("getJClass").runMethod("getName").toString() + "::" + f.runMethod("getName")
+                    val fieldName = this.javaClass.declaredFields.find { it.name == "function" || it.name == "\$tmp0" }!!.name
+                    val field = this.javaClass.getDeclaredField(fieldName).apply { isAccessible = true }.get(this)
+                    when (fieldName) {
+                        "function" -> field.runMethod("getOwner").runMethod("getJClass").runMethod("getName").toString() + "::" + field.runMethod("getName")
+                        else -> "${field.implementingClassName}::$lambdaSign"
+                    }
+
                 }
                 isKotlinAnonymousLambda -> parentClass.name + "::" + lambdaSign
                 isKotlinField -> parentClass.name + "." + kotlinFieldName

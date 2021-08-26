@@ -3,11 +3,16 @@
     <parent>
         <artifactId>javalin-parent</artifactId>
         <groupId>io.javalin</groupId>
-        <version>4.0.0.ALPHA2-SNAPSHOT</version>
+        <version>4.0.0.RC3-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>javalin</artifactId>
+
+    <properties>
+        <dokka.skip>false</dokka.skip>
+        <copy-build-resources.skip>false</copy-build-resources.skip>
+    </properties>
 
     <dependencies>
         <!-- Logging -->
@@ -69,11 +74,6 @@
         <dependency>
             <groupId>com.github.spullara.mustache.java</groupId>
             <artifactId>compiler</artifactId>
-            <optional>true</optional>
-        </dependency>
-        <dependency>
-            <groupId>org.jtwig</groupId>
-            <artifactId>jtwig-core</artifactId>
             <optional>true</optional>
         </dependency>
         <dependency>
@@ -167,6 +167,11 @@
         <dependency>
             <groupId>org.webjars</groupId>
             <artifactId>swagger-ui</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

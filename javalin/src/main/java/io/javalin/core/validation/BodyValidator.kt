@@ -6,10 +6,14 @@
 
 package io.javalin.core.validation
 
-open class BodyValidator<T>(value: T?, messagePrefix: String = "Value") : Validator<T>(value, messagePrefix) {
-    @JvmOverloads
-    open fun check(fieldName: String, predicate: (T) -> Boolean, errorMessage: String = "Failed check"): BodyValidator<T> {
-        rules.add(Rule(fieldName, predicate, errorMessage))
-        return this
-    }
+import io.javalin.plugin.json.JsonMapper
+
+const val REQUEST_BODY = "REQUEST_BODY"
+
+open class BodyValidator<T>(stringValue: String?, clazz: Class<T>, jsonMapper: JsonMapper) : BaseValidator<T>(stringValue, clazz, REQUEST_BODY, jsonMapper) {
+    fun check(check: Check<T>, error: String) = check(REQUEST_BODY, check, error)
+    fun check(check: Check<T>, error: ValidationError<T>) = check(REQUEST_BODY, check, error)
+    fun check(fieldName: String, check: Check<T>, error: String) = addRule(fieldName, { check(it!!) }, error) as BodyValidator<T>
+    fun check(fieldName: String, check: Check<T>, error: ValidationError<T>) = addRule(fieldName, { check(it!!) }, error) as BodyValidator<T>
+    override fun get(): T = super.get()!!
 }

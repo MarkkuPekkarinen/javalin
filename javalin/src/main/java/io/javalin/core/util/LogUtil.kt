@@ -60,11 +60,13 @@ object LogUtil {
         return when {
             gzipped -> "Body is gzipped (${resBody.length} bytes, not logged)"
             brotlied -> "Body is brotlied (${resBody.length} bytes, not logged)"
+            resBody.contains("resultString unavailable") -> "Body is an InputStream which can't be reset, so it can't be logged"
             else -> "Body is ${resBody.length} bytes (starts on next line):\n    $resBody"
         }
     }
 
-    fun setup(ctx: Context, matcher: PathMatcher) {
+    fun setup(ctx: Context, matcher: PathMatcher, hasRequestLogger: Boolean) {
+        if (!hasRequestLogger) return
         ctx.attribute("javalin-request-log-matcher", matcher)
         ctx.attribute("javalin-request-log-start-time", System.nanoTime())
     }

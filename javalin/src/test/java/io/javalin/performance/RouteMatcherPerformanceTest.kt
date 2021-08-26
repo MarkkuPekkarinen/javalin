@@ -11,6 +11,8 @@ import io.javalin.http.util.ContextUtil.urlDecode
 import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
+import java.util.*
+import kotlin.collections.HashMap
 
 typealias NewHandlerEntry = HandlerEntry
 
@@ -56,7 +58,7 @@ class RouteMatcherPerformanceTest {
         while (i < requestPaths.size && i < handlerPaths.size) {
             val matchedPart = handlerPaths[i]
             if (matchedPart.startsWith(":")) {
-                params[matchedPart.toLowerCase()] = urlDecode(requestPaths[i])
+                params[matchedPart.lowercase(Locale.ROOT)] = urlDecode(requestPaths[i])
             }
             i++
         }
@@ -69,11 +71,11 @@ class RouteMatcherPerformanceTest {
 
     companion object {
         val routes = listOf(
-                "/test/:user/some/path/here",
+                "/test/{user}/some/path/here",
                 "/test/*/some/more/path/here",
                 "/test/path/route/without/wildcards",
                 "/test/has/wildcard/at/the/end/*",
-                "/test/:id/simple/route/:user/create/",
+                "/test/{id}/simple/route/{user}/create/",
                 "/matches/all/*/user",
                 "/test/*"
         )

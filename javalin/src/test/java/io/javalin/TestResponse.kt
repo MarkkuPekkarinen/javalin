@@ -10,6 +10,7 @@ package io.javalin
 import com.mashape.unirest.http.HttpMethod
 import com.mashape.unirest.http.Unirest
 import io.javalin.core.util.Header
+import io.javalin.http.ContentType
 import io.javalin.http.util.SeekableWriter
 import io.javalin.testing.TestUtil
 import org.apache.commons.io.FileUtils
@@ -20,7 +21,6 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.*
-import javax.servlet.http.Cookie
 
 class TestResponse {
 
@@ -122,21 +122,6 @@ class TestResponse {
         assertThat(http.call(HttpMethod.GET, "/hello-abs").body).isEqualTo("Redirected")
     }
 
-    @Test
-    fun `setting a cookie works`() = TestUtil.test { app, http ->
-        app.get("/create-cookie") { ctx -> ctx.cookie("Test", "Tast") }
-        app.get("/get-cookie") { ctx -> ctx.result(ctx.cookie("Test")!!) }
-        assertThat(http.get("/create-cookie").headers.getFirst(Header.SET_COOKIE)).isEqualTo("Test=Tast; Path=/")
-        assertThat(http.getBody("/get-cookie")).isEqualTo("Tast")
-    }
-
-    @Test
-    fun `setting a Cookie object works`() = TestUtil.test { app, http ->
-        app.get("/create-cookie") { ctx -> ctx.cookie(Cookie("Hest", "Hast").apply { maxAge = 7 }) }
-        assertThat(http.get("/create-cookie").headers.getFirst(Header.SET_COOKIE)).contains("Hest=Hast")
-        assertThat(http.get("/create-cookie").headers.getFirst(Header.SET_COOKIE)).contains("Max-Age=7")
-    }
-
     // Fix for https://github.com/tipsy/javalin/issues/543
     @Test
     fun `reading the result string resets the stream`() = TestUtil.test { app, http ->
@@ -156,7 +141,7 @@ class TestResponse {
 
     @Test
     fun `seekable - range works`() = TestUtil.test { app, http ->
-        app.get("/seekable") { ctx -> ctx.seekableStream(getSeekableInput(), "text/plain") }
+        app.get("/seekable") { ctx -> ctx.seekableStream(getSeekableInput(), ContentType.PLAIN) }
         val response = Unirest.get(http.origin + "/seekable")
                 .headers(mapOf(Header.RANGE to "bytes=${SeekableWriter.chunkSize}-${SeekableWriter.chunkSize * 2 - 1}"))
                 .asString().body
@@ -165,14 +150,14 @@ class TestResponse {
 
     @Test
     fun `seekable - no-range works`() = TestUtil.test { app, http ->
-        app.get("/seekable-2") { ctx -> ctx.seekableStream(getSeekableInput(), "text/plain") }
+        app.get("/seekable-2") { ctx -> ctx.seekableStream(getSeekableInput(), ContentType.PLAIN) }
         val response = Unirest.get(http.origin + "/seekable-2").asString().body
         assertThat(response.length).isEqualTo(getSeekableInput().available())
     }
 
     @Test
     fun `seekable - overreaching range works`() = TestUtil.test { app, http ->
-        app.get("/seekable-3") { ctx -> ctx.seekableStream(getSeekableInput(), "text/plain") }
+        app.get("/seekable-3") { ctx -> ctx.seekableStream(getSeekableInput(), ContentType.PLAIN) }
         val response = Unirest.get(http.origin + "/seekable-3")
                 .headers(mapOf(Header.RANGE to "bytes=0-${SeekableWriter.chunkSize * 4}"))
                 .asString().body
@@ -181,7 +166,7 @@ class TestResponse {
 
     @Test
     fun `seekable - file smaller than chunksize works`() = TestUtil.test { app, http ->
-        app.get("/seekable-4") { ctx -> ctx.seekableStream(getSeekableInput(repeats = 50), "text/plain") }
+        app.get("/seekable-4") { ctx -> ctx.seekableStream(getSeekableInput(repeats = 50), ContentType.PLAIN) }
         val response = Unirest.get(http.origin + "/seekable-4")
                 .headers(mapOf(Header.RANGE to "bytes=0-${SeekableWriter.chunkSize}"))
                 .asString().body

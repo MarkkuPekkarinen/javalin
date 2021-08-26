@@ -7,6 +7,8 @@
 package io.javalin
 
 import io.javalin.http.Context
+import io.javalin.plugin.json.JavalinJackson
+import io.javalin.plugin.json.jsonMapper
 import io.javalin.plugin.rendering.vue.JavalinVue
 import io.javalin.plugin.rendering.vue.VueComponent
 import io.javalin.testing.TestUtil
@@ -32,7 +34,7 @@ class TestJavalinVue {
             with(JavalinVue) {
                 vueVersion { it.vue2() }
                 isDev = null // reset
-                stateFunction = { ctx -> mapOf<String, String>() } // reset
+                stateFunction = { mapOf<String, String>() } // reset
                 rootDirectory { it.externalPath("src/test/resources/vue") } // src/main ->
                 optimizeDependencies = false
             }
@@ -46,14 +48,15 @@ class TestJavalinVue {
     private val state = State(User("tipsy", "tipsy@tipsy.tipsy"), Role("Maintainer"))
 
     private fun String.uriEncodeForJavascript() =
-            URLEncoder.encode(this, Charsets.UTF_8.name()).replace("+", "%20")
+        URLEncoder.encode(this, Charsets.UTF_8.name()).replace("+", "%20")
 
     @Test
     fun `vue component with state`() = TestUtil.test { app, http ->
-        val encodedState = """{"pathParams":{"my-param":"test-path-param"},"queryParams":{"qp":["test-query-param"]},"state":{"user":{"name":"tipsy","email":"tipsy@tipsy.tipsy"},"role":{"name":"Maintainer"}}}""".uriEncodeForJavascript()
-        JavalinVue.stateFunction = { ctx -> state }
-        app.get("/vue/:my-param", VueComponent("<test-component></test-component>"))
-        val res = http.getBody("/vue/test-path-param?qp=test-query-param")
+        val encodedState =
+            """{"pathParams":{"my-param":"test-path-param"},"state":{"user":{"name":"tipsy","email":"tipsy@tipsy.tipsy"},"role":{"name":"Maintainer"}}}""".uriEncodeForJavascript()
+        JavalinVue.stateFunction = { state }
+        app.get("/vue/{my-param}", VueComponent("test-component"))
+        val res = http.getBody("/vue/test-path-param")
         assertThat(res).contains(encodedState)
         assertThat(res).contains("""Vue.component("test-component", {template: "#test-component"});""")
         assertThat(res).contains("<body><test-component></test-component></body>")
@@ -62,9 +65,9 @@ class TestJavalinVue {
 
     @Test
     fun `vue component without state`() = TestUtil.test { app, http ->
-        val encodedEmptyState = """{"pathParams":{},"queryParams":{},"state":{}}""".uriEncodeForJavascript()
+        val encodedEmptyState = """{"pathParams":{},"state":{}}""".uriEncodeForJavascript()
 
-        app.get("/no-state", VueComponent("<test-component></test-component>"))
+        app.get("/no-state", VueComponent("test-component"))
         val res = http.getBody("/no-state")
         assertThat(res).contains(encodedEmptyState)
         assertThat(res).contains("<body><test-component></test-component></body>")
@@ -74,9 +77,9 @@ class TestJavalinVue {
     @Test
     fun `vue3 component without state`() = TestUtil.test { app, http ->
         JavalinVue.vueVersion { it.vue3("app") }
-        val encodedEmptyState = """{"pathParams":{},"queryParams":{},"state":{}}""".uriEncodeForJavascript()
+        val encodedEmptyState = """{"pathParams":{},"state":{}}""".uriEncodeForJavascript()
 
-        app.get("/no-state", VueComponent("<test-component-3></test-component-3>"))
+        app.get("/no-state", VueComponent("test-component-3"))
         val res = http.getBody("/no-state")
         assertThat(res).contains(encodedEmptyState)
         assertThat(res).contains("<body><test-component-3></test-component-3></body>")
@@ -87,10 +90,11 @@ class TestJavalinVue {
     @Test
     fun `vue3 component with state`() = TestUtil.test { app, http ->
         JavalinVue.vueVersion { it.vue3("app") }
-        val encodedState = """{"pathParams":{"my-param":"test-path-param"},"queryParams":{"qp":["test-query-param"]},"state":{"user":{"name":"tipsy","email":"tipsy@tipsy.tipsy"},"role":{"name":"Maintainer"}}}""".uriEncodeForJavascript()
-        JavalinVue.stateFunction = { ctx -> state }
-        app.get("/vue/:my-param", VueComponent("<test-component-3></test-component-3>"))
-        val res = http.getBody("/vue/test-path-param?qp=test-query-param")
+        val encodedState =
+            """{"pathParams":{"my-param":"test-path-param"},"state":{"user":{"name":"tipsy","email":"tipsy@tipsy.tipsy"},"role":{"name":"Maintainer"}}}""".uriEncodeForJavascript()
+        JavalinVue.stateFunction = { state }
+        app.get("/vue/{my-param}", VueComponent("test-component-3"))
+        val res = http.getBody("/vue/test-path-param")
         assertThat(res).contains(encodedState)
         assertThat(res).contains("""app.component("test-component-3", {template: "#test-component-3"});""")
         assertThat(res).contains("<body><test-component-3></test-component-3></body>")
@@ -99,13 +103,13 @@ class TestJavalinVue {
 
     @Test
     fun `vue component with component-specific state`() = TestUtil.test { app, http ->
-        val encodedEmptyState = """{"pathParams":{},"queryParams":{},"state":{}}""".uriEncodeForJavascript()
+        val encodedEmptyState = """{"pathParams":{},"state":{}}""".uriEncodeForJavascript()
 
-        val encodedTestState = """{"pathParams":{},"queryParams":{},"state":{"test":"tast"}}""".uriEncodeForJavascript()
+        val encodedTestState = """{"pathParams":{},"state":{"test":"tast"}}""".uriEncodeForJavascript()
 
-        app.get("/no-state", VueComponent("<test-component></test-component>"))
+        app.get("/no-state", VueComponent("test-component"))
         val noStateRes = http.getBody("/no-state")
-        app.get("/specific-state", VueComponent("<test-component></test-component>", mapOf("test" to "tast")))
+        app.get("/specific-state", VueComponent("test-component", mapOf("test" to "tast")))
         val specificStateRes = http.getBody("/specific-state")
         assertThat(noStateRes).contains(encodedEmptyState)
         assertThat(specificStateRes).contains(encodedTestState)
@@ -114,34 +118,22 @@ class TestJavalinVue {
     @Test
     fun `vue component works Javalin#error`() = TestUtil.test { app, http ->
         app.get("/") { it.status(404) }
-        app.error(404, "html", VueComponent("<test-component></test-component>"))
+        app.error(404, "html", VueComponent("test-component"))
         assertThat(http.htmlGet("/").body).contains("<body><test-component></test-component></body>")
     }
 
     @Test
     fun `unicode in template works`() = TestUtil.test { app, http ->
-        app.get("/unicode", VueComponent("<test-component></test-component>"))
+        app.get("/unicode", VueComponent("test-component"))
         assertThat(http.getBody("/unicode")).contains("<div>Test ÆØÅ</div>")
     }
 
     @Test
-    fun `default params are escaped`() = TestUtil.test { app, http ->
+    fun `state is escaped`() = TestUtil.test { app, http ->
         val encodedXSS = "%3Cscript%3Ealert%281%29%3Cscript%3E"
-        app.get("/escaped", VueComponent("<test-component></test-component>"))
-        // keys
-        assertThat(http.getBody("/escaped?${encodedXSS}=value")).doesNotContain("<script>alert(1)<script>")
-        assertThat(http.getBody("/escaped?${encodedXSS}=value")).contains(encodedXSS)
-        // values
-        assertThat(http.getBody("/escaped?key=${encodedXSS}")).doesNotContain("<script>alert(1)<script>")
-        assertThat(http.getBody("/escaped?key=${encodedXSS}")).contains(encodedXSS)
-    }
-
-    @Test
-    fun `quotes are handled correctly`() = TestUtil.test { app, http ->
-        val encodedTestObject = """"test":["\"cool\""]""".uriEncodeForJavascript()
-        app.get("/escaped", VueComponent("<test-component></test-component>"))
-
-        assertThat(http.getBody("""/escaped?test=%22cool%22""")).contains(encodedTestObject)
+        app.get("/escaped", VueComponent("test-component", mapOf("xss" to "<script>alert(1)<script>")))
+        assertThat(http.getBody("/escaped")).doesNotContain("<script>alert(1)<script>")
+        assertThat(http.getBody("/escaped")).contains(encodedXSS)
     }
 
     @Test
@@ -171,7 +163,7 @@ class TestJavalinVue {
 
     @Test
     fun `setting rootDirectory with Path works`() = TestUtil.test { app, http ->
-        JavalinVue.rootDirectory = Paths.get("src/test/resources/vue")
+        JavalinVue.rootDirectory { it.explicitPath(Paths.get("src/test/resources/vue")) }
         app.get("/path", VueComponent("test-component"))
         assertThat(http.getBody("/path")).contains("<test-component></test-component>")
     }
@@ -185,38 +177,42 @@ class TestJavalinVue {
     }
 
     @Test
-    fun `@cdnWebjar resolves to webjar on localhost`() = TestUtil.test { app, http ->
+    fun `@cdnWebjar resolves to webjar on localhost`() {
         val ctx = mockk<Context>(relaxed = true)
+        every { ctx.jsonMapper() } returns JavalinJackson()
         JavalinVue.isDev = true // reset
         every { ctx.url() } returns "http://localhost:1234/"
-        VueComponent("<test-component></test-component>").handle(ctx)
+        VueComponent("test-component").handle(ctx)
         val slot = slot<String>().also { verify { ctx.html(html = capture(it)) } }
         assertThat(slot.captured).contains("""src="/webjars/""")
     }
 
     @Test
-    fun `@cdnWebjar resolves to cdn on non-localhost`() = TestUtil.test { app, http ->
+    fun `@cdnWebjar resolves to cdn on non-localhost`() {
         val ctx = mockk<Context>(relaxed = true)
+        every { ctx.jsonMapper() } returns JavalinJackson()
         every { ctx.url() } returns "https://example.com"
-        VueComponent("<test-component></test-component>").handle(ctx)
+        VueComponent("test-component").handle(ctx)
         val slot = slot<String>().also { verify { ctx.html(html = capture(it)) } }
         assertThat(slot.captured).contains("""src="https://cdn.jsdelivr.net/webjars/""")
     }
 
     @Test
-    fun `@cdnWebjar resolves to https even on non https hosts`() = TestUtil.test { app, http ->
+    fun `@cdnWebjar resolves to https even on non https hosts`() {
         val ctx = mockk<Context>(relaxed = true)
+        every { ctx.jsonMapper() } returns JavalinJackson()
         every { ctx.url() } returns "http://123.123.123.123:1234/"
-        VueComponent("<test-component></test-component>").handle(ctx)
+        VueComponent("test-component").handle(ctx)
         val slot = slot<String>().also { verify { ctx.html(html = capture(it)) } }
         assertThat(slot.captured).contains("""src="https://cdn.jsdelivr.net/webjars/""")
     }
 
     @Test
-    fun `@inlineFile functionality works as expected if not-dev`() = TestUtil.test { app, http ->
+    fun `@inlineFile functionality works as expected if not-dev`() {
         val ctx = mockk<Context>(relaxed = true)
+        every { ctx.jsonMapper() } returns JavalinJackson()
         every { ctx.url() } returns "http://123.123.123.123:1234/"
-        VueComponent("<test-component></test-component>").handle(ctx)
+        VueComponent("test-component").handle(ctx)
         val slot = slot<String>().also { verify { ctx.html(html = capture(it)) } }
         assertThat(slot.captured).contains("""<script>let a = "Always included";let ${"\$"}a = "Dollar works"</script>""")
         assertThat(slot.captured).contains("""<script>let b = "Included if not dev"</script>""")
@@ -226,16 +222,24 @@ class TestJavalinVue {
     }
 
     @Test
-    fun `@inlineFile functionality works as expected if dev`() = TestUtil.test { app, http ->
+    fun `@inlineFile functionality works as expected if dev`() {
         val ctx = mockk<Context>(relaxed = true)
+        every { ctx.jsonMapper() } returns JavalinJackson()
         every { ctx.url() } returns "http://localhost:1234/"
-        VueComponent("<test-component></test-component>").handle(ctx)
+        VueComponent("test-component").handle(ctx)
         val slot = slot<String>().also { verify { ctx.html(html = capture(it)) } }
         assertThat(slot.captured).contains("""<script>let a = "Always included";let ${"\$"}a = "Dollar works"</script>""")
         assertThat(slot.captured).contains("""<script>let b = "Included if dev"</script>""")
         assertThat(slot.captured).doesNotContain("""<script>let b = "Included if not dev"</script>""")
         assertThat(slot.captured).doesNotContain("""<script>@inlineFileNotDev("/vue/scripts-not-dev.js")</script>""")
         assertThat(slot.captured).doesNotContain("""<script>@inlineFile""")
+    }
+
+    @Test
+    fun `LoadableData class is included`() = TestUtil.test { app, http ->
+        app.get("/shorthand", VueComponent("test-component"))
+        val response = http.getBody("/shorthand")
+        assertThat(response).contains("LoadableData")
     }
 
 }

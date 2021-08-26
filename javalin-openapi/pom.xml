@@ -3,11 +3,16 @@
     <parent>
         <artifactId>javalin-parent</artifactId>
         <groupId>io.javalin</groupId>
-        <version>4.0.0.ALPHA2-SNAPSHOT</version>
+        <version>4.0.0.RC3-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>javalin-openapi</artifactId>
+
+    <properties>
+        <dokka.skip>false</dokka.skip>
+        <copy-build-resources.skip>false</copy-build-resources.skip>
+    </properties>
 
     <dependencies>
         <!-- BEGIN Project dependencies -->

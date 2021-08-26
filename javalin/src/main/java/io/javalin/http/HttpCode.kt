@@ -1,10 +1,6 @@
 package io.javalin.http
 
-enum class HttpCode(
-        val status: Int,
-        val message: String
-) {
-
+enum class HttpCode(val status: Int, val message: String) {
     CONTINUE(100, "Continue"),
     SWITCHING_PROTOCOLS(101, "Switching Protocols"),
     PROCESSING(102, "Processing"),
@@ -64,23 +60,11 @@ enum class HttpCode(
     NOT_EXTENDED(510, "Not Extended"),
     NETWORK_AUTHENTICATION_REQUIRED(511, "Network Authentication Required");
 
+    override fun toString(): String =
+        "$status $message"
+
     companion object {
-        private val codes = Array<HttpCode?>(512) { null }
-
-        init {
-            values().forEach { code ->
-                codes[code.status] = code
-            }
-        }
-
-        fun codeFor(status: Int): HttpCode? =
-                if (status < 0 || status >= codes.size) {
-                    null
-                } else {
-                    codes[status]
-                }
-
-        fun messageFor(status: Int) = codeFor(status)?.message
-
+        fun forStatus(status: Int) = values().find { it.status == status }
     }
+
 }

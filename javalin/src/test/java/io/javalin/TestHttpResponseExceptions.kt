@@ -8,6 +8,7 @@ package io.javalin
 
 import io.javalin.core.util.Header
 import io.javalin.http.BadRequestResponse
+import io.javalin.http.ContentType
 import io.javalin.http.ForbiddenResponse
 import io.javalin.http.HttpResponseException
 import io.javalin.http.UnauthorizedResponse
@@ -38,8 +39,8 @@ class TestHttpResponseExceptions {
     @Test
     fun `response is formatted as text if client wants text`() = TestUtil.test { app, http ->
         app.post("/") { throw ForbiddenResponse() }
-        val response = http.post("/").header(Header.ACCEPT, "text/plain").asString()
-        assertThat(response.headers.getFirst(Header.CONTENT_TYPE)).isEqualTo("text/plain")
+        val response = http.post("/").header(Header.ACCEPT, ContentType.PLAIN).asString()
+        assertThat(response.headers.getFirst(Header.CONTENT_TYPE)).isEqualTo(ContentType.PLAIN)
         assertThat(response.status).isEqualTo(HttpStatus.FORBIDDEN_403)
         assertThat(response.body).isEqualTo("Forbidden")
     }
@@ -47,15 +48,16 @@ class TestHttpResponseExceptions {
     @Test
     fun `response is formatted as json if client wants json`() = TestUtil.test { app, http ->
         app.post("/") { throw ForbiddenResponse("Off limits!") }
-        val response = http.post("/").header(Header.ACCEPT, "application/json").asString()
-        assertThat(response.headers.getFirst(Header.CONTENT_TYPE)).isEqualTo("application/json")
+        val response = http.post("/").header(Header.ACCEPT, ContentType.JSON).asString()
+        assertThat(response.headers.getFirst(Header.CONTENT_TYPE)).isEqualTo(ContentType.JSON)
         assertThat(response.status).isEqualTo(HttpStatus.FORBIDDEN_403)
-        assertThat(response.body).isEqualTo("""{
-                |    "title": "Off limits!",
-                |    "status": 403,
-                |    "type": "https://javalin.io/documentation#forbiddenresponse",
-                |    "details": {}
-                |}""".trimMargin()
+        assertThat(response.body).isEqualTo(
+            """{
+            |    "title": "Off limits!",
+            |    "status": 403,
+            |    "type": "https://javalin.io/documentation#forbiddenresponse",
+            |    "details": {}
+            |}""".trimMargin()
         )
     }
 
@@ -64,9 +66,10 @@ class TestHttpResponseExceptions {
     @Test
     fun `custom response has default type`() = TestUtil.test { app, http ->
         app.post("/") { throw CustomResponse() }
-        val response = http.post("/").header(Header.ACCEPT, "application/json").asString()
+        val response = http.post("/").header(Header.ACCEPT, ContentType.JSON).asString()
         assertThat(response.status).isEqualTo(418)
-        assertThat(response.body).isEqualTo("""{
+        assertThat(response.body).isEqualTo(
+            """{
                 |    "title": "",
                 |    "status": 418,
                 |    "type": "https://javalin.io/documentation#error-responses",
@@ -107,7 +110,7 @@ class TestHttpResponseExceptions {
             }, 0, TimeUnit.MILLISECONDS)
             return future
         }
-        app.get("/completed-future-route") { ctx -> ctx.result(getExceptionallyCompletingFuture()) }
+        app.get("/completed-future-route") { it.future(getExceptionallyCompletingFuture()) }
         assertThat(http.get("/completed-future-route").body).isEqualTo("Unauthorized")
         assertThat(http.get("/completed-future-route").status).isEqualTo(401)
     }
@@ -115,12 +118,12 @@ class TestHttpResponseExceptions {
     @Test
     fun `throwing HttpResponseExceptions in future works`() = TestUtil.test { app, http ->
         fun getThrowingFuture() = CompletableFuture.supplyAsync {
-            if (true) {
+            if (Math.random() < 2) { // it's true!
                 throw UnauthorizedResponse()
             }
             "Result"
         }
-        app.get("/throwing-future-route") { ctx -> ctx.result(getThrowingFuture()) }
+        app.get("/throwing-future-route") { it.future(getThrowingFuture()) }
         assertThat(http.get("/throwing-future-route").body).isEqualTo("Unauthorized")
         assertThat(http.get("/throwing-future-route").status).isEqualTo(401)
     }
@@ -134,23 +137,24 @@ class TestHttpResponseExceptions {
             }, 0, TimeUnit.MILLISECONDS)
             return future
         }
-        app.get("/completed-future-route") { ctx -> ctx.result(getUnexpectedExceptionallyCompletingFuture()) }
+        app.get("/completed-future-route") { it.future(getUnexpectedExceptionallyCompletingFuture()) }
         app.exception(IllegalStateException::class.java) { exception, ctx -> ctx.result(exception.message!!) }
         assertThat(http.get("/completed-future-route").body).isEqualTo("Unexpected message")
     }
 
     @Test
-    fun `default content type affects http response errors`() = TestUtil.test(Javalin.create { it.defaultContentType = "application/json" }) { app, http ->
+    fun `default content type affects http response errors`() = TestUtil.test(Javalin.create { it.defaultContentType = ContentType.JSON }) { app, http ->
         app.get("/content-type") { throw ForbiddenResponse() }
         val response = http.get("/content-type")
         assertThat(response.status).isEqualTo(HttpStatus.FORBIDDEN_403)
-        assertThat(response.headers.getFirst(Header.CONTENT_TYPE)).isEqualTo("application/json")
-        assertThat(response.body).isEqualTo("""{
-                |    "title": "Forbidden",
-                |    "status": 403,
-                |    "type": "https://javalin.io/documentation#forbiddenresponse",
-                |    "details": {}
-                |}""".trimMargin()
+        assertThat(response.headers.getFirst(Header.CONTENT_TYPE)).isEqualTo(ContentType.JSON)
+        assertThat(response.body).isEqualTo(
+            """{
+            |    "title": "Forbidden",
+            |    "status": 403,
+            |    "type": "https://javalin.io/documentation#forbiddenresponse",
+            |    "details": {}
+            |}""".trimMargin()
         )
     }
 
@@ -158,12 +162,13 @@ class TestHttpResponseExceptions {
     fun `default exceptions work well with custom content-typed errors`() = TestUtil.test { app, http ->
         app.get("/") { throw ForbiddenResponse("Off limits!") }
         app.error(403, "html") { it.result("Only mapped for HTML") }
-        assertThat(http.jsonGet("/").body).isEqualTo("""{
-                |    "title": "Off limits!",
-                |    "status": 403,
-                |    "type": "https://javalin.io/documentation#forbiddenresponse",
-                |    "details": {}
-                |}""".trimMargin()
+        assertThat(http.jsonGet("/").body).isEqualTo(
+            """{
+            |    "title": "Off limits!",
+            |    "status": 403,
+            |    "type": "https://javalin.io/documentation#forbiddenresponse",
+            |    "details": {}
+            |}""".trimMargin()
         )
         assertThat(http.htmlGet("/").body).isEqualTo("Only mapped for HTML")
     }
@@ -172,19 +177,20 @@ class TestHttpResponseExceptions {
     fun `can override HttpResponseExceptions`() = TestUtil.test { app, http ->
         val randomNumberString = (Math.random() * 10000).toString()
         app.get("/") { throw BadRequestResponse() }
-        app.exception(BadRequestResponse::class.java) { e, ctx -> ctx.result(randomNumberString) }
+        app.exception(BadRequestResponse::class.java) { _, ctx -> ctx.result(randomNumberString) }
         assertThat(http.getBody("/")).isEqualTo(randomNumberString)
     }
 
     @Test
     fun `details are displayed as a map in json`() = TestUtil.test { app, http ->
         app.get("/") { throw ForbiddenResponse("Off limits!", mapOf("a" to "A", "b" to "B")) }
-        assertThat(http.jsonGet("/").body).isEqualTo("""{
-                |    "title": "Off limits!",
-                |    "status": 403,
-                |    "type": "https://javalin.io/documentation#forbiddenresponse",
-                |    "details": {"a":"A","b":"B"}
-                |}""".trimMargin()
+        assertThat(http.jsonGet("/").body).isEqualTo(
+            """{
+            |    "title": "Off limits!",
+            |    "status": 403,
+            |    "type": "https://javalin.io/documentation#forbiddenresponse",
+            |    "details": {"a":"A","b":"B"}
+            |}""".trimMargin()
         )
     }
 

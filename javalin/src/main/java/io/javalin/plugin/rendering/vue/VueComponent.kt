@@ -4,7 +4,7 @@ import io.javalin.core.util.Header
 import io.javalin.http.Context
 import io.javalin.http.Handler
 import io.javalin.http.InternalServerErrorResponse
-import io.javalin.plugin.json.JavalinJson
+import io.javalin.plugin.json.jsonMapper
 import io.javalin.plugin.rendering.vue.FileInliner.inlineFiles
 import io.javalin.plugin.rendering.vue.JavalinVue.cacheControl
 import io.javalin.plugin.rendering.vue.JavalinVue.cachedDependencyResolver
@@ -32,9 +32,10 @@ class VueComponent @JvmOverloads constructor(val component: String, val state: A
         if (componentId !in dependencies) throw InternalServerErrorResponse("Route component not found: $routeComponent")
         ctx.html(allFiles.find { it.endsWith("vue/layout.html") }!!.readText() // we start with the layout file
                 .inlineFiles(allFiles.filterNot { it.isVueFile() }) // we then inline css/js files
-                .replace("@componentRegistration", "@componentRegistration@serverState") // add @serverState anchor for later
+                .replace("@componentRegistration", "@loadableData@componentRegistration@serverState") // add anchors for later
+                .replace("@loadableData", loadableDataScript) // add loadable data class
                 .replace("@componentRegistration", dependencies) // add all dependencies
-                .replace("@serverState", getState(ctx, state)) // add the way too complex state
+                .replace("@serverState", getState(ctx, state)) // add escaped params and state
                 .replace("@routeComponent", routeComponent) // finally, add the route component itself
                 .replace("@cdnWebjar/", if (isDev == true) "/webjars/" else "https://cdn.jsdelivr.net/webjars/org.webjars.npm/")
         ).header(Header.CACHE_CONTROL, cacheControl)
@@ -66,10 +67,9 @@ object FileInliner {
 
 internal fun getState(ctx: Context, state: Any?) = "\n<script>\n" +
         "${prototypeOrGlobalConfig()}.\$javalin = JSON.parse(decodeURIComponent(\"${
-            urlEncodeForJavascript(JavalinJson.toJson(
+            urlEncodeForJavascript(ctx.jsonMapper().toJsonString(
                     mapOf(
                             "pathParams" to ctx.pathParamMap(),
-                            "queryParams" to ctx.queryParamMap(),
                             "state" to (state ?: stateFunction(ctx))
                     )
             ))

@@ -1,42 +1,39 @@
 package io.javalin.http.sse
 
 import java.io.IOException
+import java.io.InputStream
 import javax.servlet.AsyncContext
 import javax.servlet.ServletOutputStream
 
 class Emitter(private var asyncContext: AsyncContext) {
 
     private lateinit var output: ServletOutputStream
-    private var close = false
+    private var closed = false
     private val newline = "\n"
 
     init {
         try {
             this.output = asyncContext.response.outputStream
         } catch (e: IOException) {
-            close = true
+            closed = true
         }
     }
 
-    @JvmOverloads
-    fun emit(event: String, data: String, id: String? = null) = synchronized(this) {
+    fun emit(event: String, data: InputStream, id: String?) = synchronized(this) {
         try {
-            val sb = StringBuilder()
             if (id != null) {
-                sb.append("id: $id$newline")
+                output.print("id: $id$newline")
             }
-            sb.append("event: $event$newline")
-            data.lines().forEach { line ->
-                sb.append("data: $line$newline")
-            }
-            sb.append("$newline$newline")
-            output.print(sb.toString())
+            output.print("event: $event$newline")
+            output.print("data: " )
+            data.copyTo(output)
+            output.print(newline)
             asyncContext.response.flushBuffer()
         } catch (e: IOException) {
-            close = true
+            closed = true
         }
     }
 
-    fun isClose() = close
+    fun isClosed() = closed
 
 }

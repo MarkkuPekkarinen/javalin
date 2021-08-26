@@ -7,7 +7,9 @@
 package io.javalin
 
 import com.mashape.unirest.http.Unirest
+import io.javalin.core.util.JavalinLogger
 import io.javalin.testing.HttpUtil
+import io.javalin.testing.NonSerializableObject
 import io.javalin.testing.TestLoggingUtil.captureStdOut
 import io.javalin.testing.TestUtil
 import org.assertj.core.api.Assertions.assertThat
@@ -34,6 +36,16 @@ class TestLogging {
     }
 
     @Test
+    fun `dev logging works with inputstreams`() = TestUtil.test(Javalin.create { it.enableDevLogging() }) { app, http ->
+        JavalinLogger.enabled = true
+        val fileStream = TestLogging::class.java.getResourceAsStream("/public/file")
+        app.get("/") { it.result(fileStream) }
+        val log = captureStdOut { http.getBody("/") }
+        assertThat(log).doesNotContain("Stream closed")
+        assertThat(log).contains("Body is an InputStream which can't be reset, so it can't be logged")
+    }
+
+    @Test
     fun `custom requestlogger is called`() {
         var loggerCalled = false
         runTest(Javalin.create {
@@ -47,7 +59,7 @@ class TestLogging {
         app.get("/async") { ctx ->
             val future = CompletableFuture<String>()
             Executors.newSingleThreadScheduledExecutor().schedule<Boolean>({ future.complete("Hello Async World!") }, 10, TimeUnit.MILLISECONDS)
-            ctx.result(future)
+            ctx.future(future)
         }
         app.start(0)
         assertThat(HttpUtil(app.port()).getBody("/async")).isEqualTo("Hello Async World!")
@@ -59,7 +71,7 @@ class TestLogging {
     fun `resultString is available in request logger and can be read multiple times`() {
         val loggerLog = mutableListOf<String?>()
         val bodyLoggingJavalin = Javalin.create {
-            it.requestLogger { ctx, ms ->
+            it.requestLogger { ctx, _ ->
                 loggerLog.add(ctx.resultString())
                 loggerLog.add(ctx.resultString())
             }
@@ -73,14 +85,14 @@ class TestLogging {
     }
 
     @Test
-    fun `debug logging works with binary stream`() {
-        val app = Javalin.create { it.enableDevLogging() }.start(0)
+    fun `debug logging works with binary stream`() = TestUtil.test(Javalin.create { it.enableDevLogging() }) { app, http ->
+        JavalinLogger.enabled = true
         app.get("/") {
             val imagePath = this::class.java.classLoader.getResource("upload-test/image.png")
             val stream = File(imagePath.toURI()).inputStream()
             it.result(stream)
         }
-        val log = captureStdOut { Unirest.get("http://localhost:" + app.port() + "/").asString() }
+        val log = captureStdOut { http.getBody("/") }
         assertThat(log).contains("Body is binary (not logged)")
     }
 }

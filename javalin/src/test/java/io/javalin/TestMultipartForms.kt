@@ -6,14 +6,15 @@
 
 package io.javalin
 
+import io.javalin.http.ContentType
 import io.javalin.plugin.json.JavalinJackson
 import io.javalin.testing.TestUtil
 import io.javalin.testing.UploadInfo
-import okhttp3.MediaType
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import org.apache.commons.io.IOUtils
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.Test
@@ -53,10 +54,11 @@ class TestMultipartForms {
         val response = http.post("/test-upload")
                 .field("upload", uploadFile)
                 .asString()
-        val uploadInfo = JavalinJackson.fromJson(response.body, UploadInfo::class.java)
+
+        val uploadInfo = JavalinJackson().fromJsonString(response.body, UploadInfo::class.java)
         assertThat(uploadInfo.size).isEqualTo(uploadFile.length())
         assertThat(uploadInfo.filename).isEqualTo(uploadFile.name)
-        assertThat(uploadInfo.contentType).isEqualTo("application/octet-stream")
+        assertThat(uploadInfo.contentType).isEqualTo(ContentType.OCTET_STREAM)
         assertThat(uploadInfo.extension).isEqualTo(".mp3")
     }
 
@@ -68,12 +70,12 @@ class TestMultipartForms {
         }
         val uploadFile = File("src/test/resources/upload-test/image.png")
         val response = http.post("/test-upload")
-                .field("upload", uploadFile, "image/png")
+                .field("upload", uploadFile, ContentType.IMAGE_PNG.mimeType)
                 .asString()
-        val uploadInfo = JavalinJackson.fromJson(response.body, UploadInfo::class.java)
+        val uploadInfo = JavalinJackson().fromJsonString(response.body, UploadInfo::class.java)
         assertThat(uploadInfo.size).isEqualTo(uploadFile.length())
         assertThat(uploadInfo.filename).isEqualTo(uploadFile.name)
-        assertThat(uploadInfo.contentType).isEqualTo("image/png")
+        assertThat(uploadInfo.contentType).isEqualTo(ContentType.IMAGE_PNG.mimeType)
         assertThat(uploadInfo.extension).isEqualTo(".png")
         assertThat(uploadInfo.size).isEqualTo(6690L)
     }
@@ -117,7 +119,7 @@ class TestMultipartForms {
         app.post("/test-upload") { ctx -> ctx.result(ctx.uploadedFiles().joinToString("\n")) }
 
         val response = http.post("/test-upload")
-                .header("content-type", "plain/text")
+                .header("content-type", ContentType.PLAIN)
                 .body("")
                 .asString()
 
@@ -161,7 +163,7 @@ class TestMultipartForms {
             val foosExtractedManually = ctx.formParamMap()["foo"]
             val foos = ctx.formParams("foo")
             val bar = ctx.formParam("bar")
-            val baz = ctx.formParam("baz", "default")
+            val baz = ctx.formParamAsClass<String>("baz").getOrDefault("default")
             ctx.result("foos match: " + (foos == foosExtractedManually) + "\n"
                     + "foo: " + foos.joinToString(", ") + "\n"
                     + "bar: " + bar + "\n"
@@ -177,7 +179,7 @@ class TestMultipartForms {
                                 .addFormDataPart("foo", "foo-2")
                                 .build()
                 ).build()
-        ).execute().body()!!.string()
+        ).execute().body!!.string()
         val expectedContent = ("foos match: true" + "\n"
                 + "foo: foo-1, foo-2" + "\n"
                 + "bar: bar-1" + "\n"
@@ -198,10 +200,10 @@ class TestMultipartForms {
                         MultipartBody.Builder()
                                 .setType(MultipartBody.FORM)
                                 .addFormDataPart("prefix", prefix)
-                                .addFormDataPart("upload", tempFile.name, RequestBody.create(MediaType.parse("text/plain"), tempFile))
+                                .addFormDataPart("upload", tempFile.name, tempFile.asRequestBody(ContentType.PLAIN.toMediaTypeOrNull()))
                                 .build()
                 ).build()
-        ).execute().body()!!.string()
+        ).execute().body!!.string()
 
         if (CRLF in responseAsString) {
             assertThat(responseAsString).isEqualTo(prefix + TEXT_FILE_CONTENT_CRLF)
