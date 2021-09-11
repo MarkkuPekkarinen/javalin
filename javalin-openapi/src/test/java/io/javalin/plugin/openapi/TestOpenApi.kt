@@ -24,6 +24,7 @@ import io.javalin.apibuilder.ApiBuilder.crud
 import io.javalin.apibuilder.CrudHandler
 import io.javalin.http.ContentType.IMAGE_PNG
 import io.javalin.http.Context
+import io.javalin.plugin.json.JavalinJackson
 import io.javalin.plugin.openapi.annotations.ContentType
 import io.javalin.plugin.openapi.annotations.HttpMethod
 import io.javalin.plugin.openapi.dsl.OpenApiDocumentation
@@ -33,7 +34,7 @@ import io.javalin.plugin.openapi.dsl.documentCrud
 import io.javalin.plugin.openapi.dsl.documented
 import io.javalin.plugin.openapi.dsl.documentedContent
 import io.javalin.plugin.openapi.dsl.oneOf
-import io.javalin.plugin.openapi.jackson.JacksonToJsonMapper
+import io.javalin.plugin.openapi.jackson.JacksonModelConverterFactory
 import io.javalin.testing.TestUtil
 import io.swagger.v3.oas.annotations.media.Schema
 import io.swagger.v3.oas.models.OpenAPI
@@ -43,7 +44,7 @@ import io.swagger.v3.oas.models.security.SecurityScheme
 import io.swagger.v3.oas.models.servers.Server
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatExceptionOfType
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import java.time.Instant
 
 class Address(val street: String, val number: Int)
@@ -478,10 +479,13 @@ class TestOpenApi {
 
     @Test
     fun `createSchema works with Instants as timestamps`() {
-        val customMapper = JacksonToJsonMapper.createObjectMapperWithDefaults()
-
         val openApiOptions = OpenApiOptions(Info().title("Example").version("1.0.0"))
-            .jacksonMapper(customMapper)
+            .modelConverterFactory(
+                JacksonModelConverterFactory(
+                    JavalinJackson.defaultMapper().configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, true)
+                )
+            )
+
         val app = Javalin.create {
             it.registerPlugin(OpenApiPlugin(openApiOptions))
         }
@@ -502,10 +506,7 @@ class TestOpenApi {
 
     @Test
     fun `createSchema Instants respect annotations`() {
-        val customMapper = JacksonToJsonMapper.createObjectMapperWithDefaults()
-
         val openApiOptions = OpenApiOptions(Info().title("Example").version("1.0.0"))
-            .jacksonMapper(customMapper)
         val app = Javalin.create {
             it.registerPlugin(OpenApiPlugin(openApiOptions))
         }
@@ -526,12 +527,7 @@ class TestOpenApi {
 
     @Test
     fun `createSchema works with Instants as strings`() {
-        val customMapper = JacksonToJsonMapper.createObjectMapperWithDefaults()
-            .configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false)
-
-        val openApiOptions = OpenApiOptions(
-            Info().title("Example").version("1.0.0")
-        ).jacksonMapper(customMapper)
+        val openApiOptions = OpenApiOptions(Info().title("Example").version("1.0.0"))
         val app = Javalin.create {
             it.registerPlugin(OpenApiPlugin(openApiOptions))
         }

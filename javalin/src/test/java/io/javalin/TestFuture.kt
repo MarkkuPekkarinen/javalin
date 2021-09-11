@@ -4,7 +4,7 @@ import io.javalin.core.util.Header
 import io.javalin.http.ContentType
 import io.javalin.testing.TestUtil
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import java.io.IOException
 import java.io.InputStream
 import java.util.concurrent.CancellationException
@@ -111,7 +111,7 @@ class TestFuture {
         assertThat(noContentResponse.headers.getFirst(Header.CONTENT_TYPE)).isEqualTo(ContentType.PLAIN)
     }
 
-    private val impatientServer: Javalin by lazy { Javalin.create { it.asyncRequestTimeout = 5} }
+    private val impatientServer: Javalin by lazy { Javalin.create { it.asyncRequestTimeout = 5 } }
 
     @Test
     fun `default timeout error isn't jetty branded`() = TestUtil.test(impatientServer) { app, http ->
@@ -124,6 +124,19 @@ class TestFuture {
         app.get("/") { it.future(getFuture("Test", delay = 50)) }
         app.error(500) { ctx -> ctx.result("My own simple error message") }
         assertThat(http.get("/").body).isEqualTo("My own simple error message")
+    }
+
+    @Test
+    fun `timed out futures are canceled`() = TestUtil.test(impatientServer) { app, http ->
+        val future = CompletableFuture<String>()
+        app.get("/") {
+            Executors.newSingleThreadScheduledExecutor().schedule({
+                future.complete("Test")
+            }, 50, TimeUnit.MILLISECONDS)
+            it.future(future)
+        }
+        assertThat(http.get("/").body).isEqualTo("Request timed out")
+        assertThat(future.isCancelled).isTrue()
     }
 
     private fun getFuture(result: String?, delay: Long = 10): CompletableFuture<String> {

@@ -26,7 +26,7 @@ import io.javalin.testing.TestUtil
 import io.javalin.testing.TestUtil.okHandler
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatExceptionOfType
-import org.junit.Test
+import org.junit.jupiter.api.Test
 
 class TestApiBuilder {
 
@@ -117,8 +117,8 @@ class TestApiBuilder {
     @Test
     fun `ApiBuilder throws if used outside of routes{} call`() = TestUtil.test { _, _ ->
         assertThatExceptionOfType(IllegalStateException::class.java)
-                .isThrownBy { ApiBuilder.get("/") { ctx -> ctx.result("") } }
-                .withMessageStartingWith("The static API can only be used within a routes() call.")
+            .isThrownBy { ApiBuilder.get("/") { ctx -> ctx.result("") } }
+            .withMessageStartingWith("The static API can only be used within a routes() call.")
     }
 
     @Test

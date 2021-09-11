@@ -20,7 +20,7 @@ import io.javalin.plugin.rendering.template.TemplateUtil.model
 import io.javalin.testing.TestUtil
 import org.apache.velocity.app.VelocityEngine
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.Test
+import org.junit.jupiter.api.Test
 
 class TestTemplates {
 
@@ -89,10 +89,12 @@ class TestTemplates {
     fun `pebble custom engines work`() = TestUtil.test { app, http ->
         app.get("/hello") { ctx -> ctx.render("templates/pebble/test.peb") }
         assertThat(http.getBody("/hello")).isEqualTo("<h1></h1>")
-        JavalinPebble.configure(PebbleEngine.Builder()
+        JavalinPebble.configure(
+            PebbleEngine.Builder()
                 .loader(ClasspathLoader())
                 .strictVariables(true)
-                .build())
+                .build()
+        )
         assertThat(http.getBody("/hello")).isEqualTo("Internal server error")
     }
 

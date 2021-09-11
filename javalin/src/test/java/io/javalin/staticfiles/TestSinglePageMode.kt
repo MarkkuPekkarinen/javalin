@@ -16,7 +16,7 @@ import io.javalin.http.staticfiles.Location
 import io.javalin.testing.TestUtil
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatExceptionOfType
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import java.io.File
 
 class TestSinglePageMode {
@@ -114,15 +114,15 @@ class TestSinglePageMode {
     @Test
     fun `SinglePageHandler throws for non-existent file - classpath`() {
         assertThatExceptionOfType(IllegalArgumentException::class.java)
-                .isThrownBy { Javalin.create { it.addSinglePageRoot("/", "/not-a-file.html") }.start().stop() }
-                .withMessageStartingWith("File at '/not-a-file.html' not found. Path should be relative to resource folder.")
+            .isThrownBy { Javalin.create { it.addSinglePageRoot("/", "/not-a-file.html") }.start().stop() }
+            .withMessageStartingWith("File at '/not-a-file.html' not found. Path should be relative to resource folder.")
     }
 
     @Test
     fun `SinglePageHandler throws for non-existent file - external`() {
         assertThatExceptionOfType(IllegalArgumentException::class.java)
-                .isThrownBy { Javalin.create { it.addSinglePageRoot("/", "/not-a-file.html", Location.EXTERNAL) }.start().stop() }
-                .withMessageStartingWith("External file at '/not-a-file.html' not found.")
+            .isThrownBy { Javalin.create { it.addSinglePageRoot("/", "/not-a-file.html", Location.EXTERNAL) }.start().stop() }
+            .withMessageStartingWith("External file at '/not-a-file.html' not found.")
     }
 
     @Test

@@ -9,17 +9,17 @@ package io.javalin
 import io.javalin.http.util.NaiveRateLimit
 import io.javalin.testing.TestUtil
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import java.util.concurrent.TimeUnit
 
 class TestRateLimitUtil {
 
     private val testApp by lazy {
         Javalin.create()
-                .get("/") { NaiveRateLimit.requestPerTimeUnit(it, 5, TimeUnit.HOURS) }
-                .get("/dynamic/{path}") { NaiveRateLimit.requestPerTimeUnit(it, 5, TimeUnit.MINUTES) }
-                .get("/ms") { NaiveRateLimit.requestPerTimeUnit(it, 1, TimeUnit.MILLISECONDS) }
-                .post("/") { }
+            .get("/") { NaiveRateLimit.requestPerTimeUnit(it, 5, TimeUnit.HOURS) }
+            .get("/dynamic/{path}") { NaiveRateLimit.requestPerTimeUnit(it, 5, TimeUnit.MINUTES) }
+            .get("/ms") { NaiveRateLimit.requestPerTimeUnit(it, 1, TimeUnit.MILLISECONDS) }
+            .post("/") { }
     }
 
     @Test

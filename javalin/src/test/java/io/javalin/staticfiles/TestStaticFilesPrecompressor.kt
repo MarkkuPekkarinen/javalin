@@ -18,7 +18,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.Test
+import org.junit.jupiter.api.Test
 
 class TestStaticFilesPrecompressor {
 
@@ -76,9 +76,11 @@ class TestStaticFilesPrecompressor {
     private fun Response.contentEncoding() = this.headers.get(Header.CONTENT_ENCODING)
 
     private fun HttpUtil.getFile(url: String, encoding: String) =
-            OkHttpClient().newCall(Request.Builder()
-                    .url(this.origin + url)
-                    .header(Header.ACCEPT_ENCODING, encoding)
-                    .build())
-                    .execute()
+        OkHttpClient().newCall(
+            Request.Builder()
+                .url(this.origin + url)
+                .header(Header.ACCEPT_ENCODING, encoding)
+                .build()
+        )
+            .execute()
 }

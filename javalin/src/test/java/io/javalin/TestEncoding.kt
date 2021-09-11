@@ -12,7 +12,7 @@ import io.javalin.core.util.Header
 import io.javalin.http.ContentType
 import io.javalin.testing.TestUtil
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import java.net.URLEncoder
 
 class TestEncoding {
@@ -53,9 +53,9 @@ class TestEncoding {
     fun `URLEncoded form-params work`() = TestUtil.test { app, http ->
         app.post("/") { ctx -> ctx.result(ctx.formParam("qp")!!) }
         val response = Unirest
-                .post(http.origin)
-                .body("qp=8%3A00+PM")
-                .asString()
+            .post(http.origin)
+            .body("qp=8%3A00+PM")
+            .asString()
         assertThat(response.body).isEqualTo("8:00 PM")
     }
 

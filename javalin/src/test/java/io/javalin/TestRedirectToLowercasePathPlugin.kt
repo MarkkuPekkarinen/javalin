@@ -10,7 +10,7 @@ import io.javalin.http.util.RedirectToLowercasePathPlugin
 import io.javalin.testing.TestUtil
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatIllegalArgumentException
-import org.junit.Test
+import org.junit.jupiter.api.Test
 
 class TestRedirectToLowercasePathPlugin {
 
@@ -23,8 +23,8 @@ class TestRedirectToLowercasePathPlugin {
     @Test
     fun `exception is thrown when using non-lowercase paths with TestRedirectToLowercasePathPlugin`() = TestUtil.test(testApp) { app, _ ->
         assertThatIllegalArgumentException()
-                .isThrownBy { app.get("/TEST") { } }
-                .withMessage("Paths must be lowercase when using RedirectToLowercasePathPlugin")
+            .isThrownBy { app.get("/TEST") { } }
+            .withMessage("Paths must be lowercase when using RedirectToLowercasePathPlugin")
     }
 
     @Test
