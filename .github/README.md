@@ -20,7 +20,7 @@ General information:
 * Documentation: [javalin.io/documentation](https://javalin.io/documentation)
 * Chat on Discord: https://discord.gg/sgak4e5NKv
 * Chat on Gitter: https://gitter.im/javalin-io/general
-* Contributions are very welcome: [CONTRIBUTING.md](https://github.com/tipsy/javalin/blob/master/CONTRIBUTING.md)
+* Contributions are very welcome: [CONTRIBUTING.md](https://github.com/tipsy/javalin/blob/master/.github/CONTRIBUTING.md)
 * License summary: https://tldrlegal.com/license/apache-license-2.0-(apache-2.0)
 * Interesting issues: [/tipsy/javalin/issues?q=label:INFO](https://github.com/tipsy/javalin/issues?q=is%3Aissue+label%3AINFO)
 
@@ -34,14 +34,14 @@ General information:
 <dependency>
     <groupId>io.javalin</groupId>
     <artifactId>javalin</artifactId>
-    <version>4.0.1</version>
+    <version>4.1.1</version>
 </dependency>
 ```
 
 #### Gradle
 
 ```groovy
-implementation "io.javalin:javalin:4.0.1"
+implementation "io.javalin:javalin:4.1.1"
 ```
 
 ### Start programming (Java)

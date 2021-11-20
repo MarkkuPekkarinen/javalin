@@ -16,13 +16,18 @@ import io.javalin.testing.TestUtil
 import org.apache.commons.io.FileUtils
 import org.apache.commons.io.IOUtils
 import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.*
 
 class TestResponse {
+
+    @TempDir
+    lateinit var workingDirectory: File
 
     @Test
     fun `setting a String result works`() = TestUtil.test { app, http ->
@@ -69,15 +74,33 @@ class TestResponse {
 
     @Test
     fun `setting an InputStream result works and InputStream is closed`() = TestUtil.test { app, http ->
-        val path = "src/test/my-file.txt"
-        File(path).printWriter().use { out ->
-            out.print("Hello, World!")
-        }
         app.get("/file") { ctx ->
-            ctx.result(FileUtils.openInputStream(File(path)))
+            val file = File(workingDirectory, "my-file.txt").also {
+                it.printWriter().use { out ->
+                    out.print("Hello, World!")
+                }
+            }
+            ctx.result(FileUtils.openInputStream(file))
         }
         assertThat(http.getBody("/file")).isEqualTo("Hello, World!")
-        assertThat(File(path).delete()).isEqualTo(true)
+    }
+
+    @Disabled("https://github.com/tipsy/javalin/pull/1413")
+    @Test
+    fun `gh-1409 entrypoint to analyze compression strategy lifecycle`() {
+        val javalin = Javalin.create { javalinConfig ->
+            javalinConfig.enableCorsForAllOrigins()
+            javalinConfig.showJavalinBanner = false
+            javalinConfig.maxRequestSize = 5_000_000
+        }.start(9005)
+
+        val longString = Array(Short.MAX_VALUE.toInt()) { "0" }.joinToString()
+
+        javalin.get("/route") { ctx ->
+            ctx.result(longString)
+        }
+
+        while (true) {} // should be requested by external tool
     }
 
     @Test
