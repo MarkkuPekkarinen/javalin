@@ -280,7 +280,7 @@ open class Context(@JvmField val req: HttpServletRequest, @JvmField val res: Htt
     fun queryString(): String? = req.queryString
 
     /** Gets the request scheme. */
-    fun scheme(): String = req.scheme
+    fun scheme(): String = contextResolver().scheme.invoke(this)
 
     /** Sets an attribute for the user session. */
     fun sessionAttribute(key: String, value: Any?) = req.session.setAttribute(key, value)
@@ -300,10 +300,10 @@ open class Context(@JvmField val req: HttpServletRequest, @JvmField val res: Htt
     fun sessionAttributeMap(): Map<String, Any?> = req.session.attributeNames.asSequence().associateWith { sessionAttribute(it) }
 
     /** Gets the request url. */
-    fun url(): String = req.requestURL.toString()
+    fun url(): String = contextResolver().url.invoke(this)
 
     /** Gets the full request url, including query string (if present) */
-    fun fullUrl(): String = url() + if (queryString() != null) "?" + queryString() else ""
+    fun fullUrl(): String = contextResolver().fullUrl.invoke(this)
 
     /** Gets the request context path. */
     fun contextPath(): String = req.contextPath
@@ -439,13 +439,13 @@ open class Context(@JvmField val req: HttpServletRequest, @JvmField val res: Htt
      * Serializes object to a JSON-string using the registered [io.javalin.plugin.json.JsonMapper] and sets it as the context result.
      * Also sets content type to application/json.
      */
-    fun json(obj: Any): Context = result(jsonMapper().toJsonString(obj)).contentType(ContentType.APPLICATION_JSON)
+    fun json(obj: Any): Context = contentType(ContentType.APPLICATION_JSON).result(jsonMapper().toJsonString(obj))
 
     /**
      * Serializes object to a JSON-stream using the registered [io.javalin.plugin.json.JsonMapper] and sets it as the context result.
      * Also sets content type to application/json.
      */
-    fun jsonStream(obj: Any): Context = result(jsonMapper().toJsonStream(obj)).contentType(ContentType.APPLICATION_JSON)
+    fun jsonStream(obj: Any): Context = contentType(ContentType.APPLICATION_JSON).result(jsonMapper().toJsonStream(obj))
 
     /**
      * Renders a file with specified values and sets it as the context result.
