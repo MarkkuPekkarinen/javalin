@@ -16,6 +16,7 @@ import io.javalin.testing.TestUtil
 import io.javalin.testing.TypedException
 import io.javalin.websocket.WsContext
 import org.assertj.core.api.Assertions.assertThat
+import org.eclipse.jetty.websocket.api.CloseStatus
 import org.eclipse.jetty.websocket.api.MessageTooLargeException
 import org.eclipse.jetty.websocket.api.StatusCode
 import org.eclipse.jetty.websocket.api.WebSocketConstants
@@ -527,6 +528,40 @@ class TestWebSocket {
             .header(WebSocketConstants.SEC_WEBSOCKET_PROTOCOL, "mqtt")
             .asString()
         assertThat(response.headers.getFirst(WebSocketConstants.SEC_WEBSOCKET_PROTOCOL)).isEqualTo("mqtt")
+    }
+
+    @Test
+    fun `websocket closeSession() methods`() = TestUtil.test { app, http ->
+        app.ws("/websocket") {
+            it.onConnect { app.logger().log.add("Connected") }
+            it.onMessage {
+                when (it.message()) {
+                    "NO_ARGS" -> it.closeSession()
+                    "STATUS_OBJECT" -> it.closeSession(CloseStatus(1001, "STATUS_OBJECT"))
+                    "CODE_AND_REASON" -> it.closeSession(1002, "CODE_AND_REASON")
+                    else -> it.closeSession(1003, "UNEXPECTED")
+                }
+            }
+            it.onClose { app.logger().log.add("${it.status()}:${it.reason()}") }
+        }
+
+        // test closeSession()
+        var testClient = TestClient(app, "/websocket")
+        doAndSleepWhile({ testClient.connect() }, { "Connected" !in app.logger().log })
+        doAndSleepWhile({ testClient.send("NO_ARGS") }, { "1000:null" !in app.logger().log })
+        app.logger().log.clear()
+
+        // test closeSession(CloseStatus)
+        testClient = TestClient(app, "/websocket")
+        doAndSleepWhile({ testClient.connect() }, { "Connected" !in app.logger().log })
+        doAndSleepWhile({ testClient.send("STATUS_OBJECT") }, { "1001:STATUS_OBJECT" !in app.logger().log })
+        app.logger().log.clear()
+
+        // test closeSession(code: Int, reason: String?)
+        testClient = TestClient(app, "/websocket")
+        doAndSleepWhile({ testClient.connect() }, { "Connected" !in app.logger().log })
+        doAndSleepWhile({ testClient.send("CODE_AND_REASON") }, { "1002:CODE_AND_REASON" !in app.logger().log })
+        app.logger().log.clear()
     }
 
     // ********************************************************************************************
