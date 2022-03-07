@@ -286,7 +286,7 @@ open class Context(@JvmField val req: HttpServletRequest, @JvmField val res: Htt
     fun sessionAttribute(key: String, value: Any?) = req.session.setAttribute(key, value)
 
     /** Gets specified attribute from the user session, or null. */
-    fun <T> sessionAttribute(key: String): T? = req.session.getAttribute(key) as? T
+    fun <T> sessionAttribute(key: String): T? = req.getSession(false)?.getAttribute(key) as? T
 
     fun <T> consumeSessionAttribute(key: String) = sessionAttribute<T?>(key).also { this.sessionAttribute(key, null) }
 
@@ -348,7 +348,9 @@ open class Context(@JvmField val req: HttpServletRequest, @JvmField val res: Htt
     }
 
     /** Writes the specified inputStream as a seekable stream */
-    fun seekableStream(inputStream: InputStream, contentType: String) = SeekableWriter.write(this, inputStream, contentType)
+    @JvmOverloads
+    fun seekableStream(inputStream: InputStream, contentType: String, size: Long = inputStream.available().toLong()) =
+            SeekableWriter.write(this, inputStream, contentType, size)
 
     /** Gets the current context result as an [InputStream] (if set). */
     fun resultStream(): InputStream? = resultStream
