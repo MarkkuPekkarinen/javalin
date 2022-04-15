@@ -18,7 +18,7 @@
 
     <groupId>io.javalin</groupId>
     <artifactId>javalin-parent</artifactId>
-    <version>4.3.1-SNAPSHOT</version>
+    <version>4.5.0-SNAPSHOT</version>
 
     <name>Javalin (parent)</name>
     <description>Javalin: Simple REST APIs for Java and Kotlin</description>
@@ -58,7 +58,7 @@
 
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-        <kotlin.version>1.5.31</kotlin.version>
+        <kotlin.version>1.5.32</kotlin.version>
         <kotlin.compiler.jvmTarget>1.8</kotlin.compiler.jvmTarget>
         <kotlin.compiler.incremental>true</kotlin.compiler.incremental>
         <maven.build.timestamp.format>yyyy-MM-dd'T'HH:mm:ss'Z'</maven.build.timestamp.format>
@@ -73,7 +73,7 @@
         <shade.plugin.version>3.2.4</shade.plugin.version>
         <javadoc.plugin.version>3.3.0</javadoc.plugin.version>
         <build-helper.plugin.version>3.2.0</build-helper.plugin.version>
-        <enforcer.plugin.version>3.0.0-M3</enforcer.plugin.version>
+        <enforcer.plugin.version>3.0.0</enforcer.plugin.version>
         <clean.plugin.version>3.1.0</clean.plugin.version>
         <install.plugin.version>3.0.0-M1</install.plugin.version>
         <resources.plugin.version>3.2.0</resources.plugin.version>
@@ -83,9 +83,9 @@
         <classgraph.version>4.8.102</classgraph.version>
         <commonmark.version>0.18.0</commonmark.version>
         <freemarker.version>2.3.31</freemarker.version>
-        <guava.version>30.1.1-jre</guava.version>
-        <jackson.version>2.12.4</jackson.version>
-        <jetty.version>9.4.44.v20210927</jetty.version>
+        <guava.version>31.1-jre</guava.version>
+        <jackson.version>2.13.2</jackson.version>
+        <jetty.version>9.4.46.v20220331</jetty.version>
         <jtwig.version>5.87.0.RELEASE</jtwig.version>
         <jvmbrotli.version>0.2.0</jvmbrotli.version>
         <logback.version>1.2.3</logback.version>
@@ -93,7 +93,7 @@
         <mustache.version>0.9.7</mustache.version>
         <pebble.version>3.1.5</pebble.version>
         <redoc.version>2.0.0-rc.45</redoc.version>
-        <slf4j.version>1.7.31</slf4j.version>
+        <slf4j.version>1.7.36</slf4j.version>
         <swagger.core.version>2.1.10</swagger.core.version>
         <swagger.parser.version>2.0.27</swagger.parser.version>
         <swagger.ui.version>3.43.0</swagger.ui.version>
@@ -105,20 +105,19 @@
 
         <!-- TEST DEPENDENCIES -->
         <assertj.version>3.20.2</assertj.version>
-        <common.io.version>2.7</common.io.version>
+        <common.io.version>2.11.0</common.io.version>
         <gson.version>2.8.6</gson.version>
         <java.websocket.version>1.5.2</java.websocket.version>
         <javax.servlet.api.version>3.1.0</javax.servlet.api.version>
         <kotlin.openapi.dsl.version>1.0.0</kotlin.openapi.dsl.version>
         <junit.version>5.7.2</junit.version>
         <hamcrest.version>1.3</hamcrest.version>
-        <mockk.version>1.12.0</mockk.version>
         <bytebuddy.version>1.11.13</bytebuddy.version>
         <bytebuddyagent.version>1.11.13</bytebuddyagent.version>
         <okhttp.version>4.9.1</okhttp.version>
-        <selenium.chrome.driver.version>3.141.59</selenium.chrome.driver.version>
-        <unirest.version>1.4.9</unirest.version>
-        <webdrivermanager.version>4.4.3</webdrivermanager.version>
+        <unirest.version>3.13.6</unirest.version>
+        <selenium.chrome.driver.version>4.1.3</selenium.chrome.driver.version>
+        <webdrivermanager.version>5.1.0</webdrivermanager.version>
     </properties>
 
     <dependencies>
@@ -348,7 +347,7 @@
                 <version>${assertj.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.mashape.unirest</groupId>
+                <groupId>com.konghq</groupId>
                 <artifactId>unirest-java</artifactId>
                 <version>${unirest.version}</version>
             </dependency>
@@ -363,11 +362,6 @@
                 <version>${okhttp.version}</version>
             </dependency>
             <dependency>
-                <groupId>commons-io</groupId>
-                <artifactId>commons-io</artifactId>
-                <version>${common.io.version}</version>
-            </dependency>
-            <dependency>
                 <groupId>com.google.code.gson</groupId>
                 <artifactId>gson</artifactId>
                 <version>${gson.version}</version>
@@ -376,11 +370,6 @@
                 <groupId>org.eclipse.jetty</groupId>
                 <artifactId>jetty-unixsocket</artifactId>
                 <version>${jetty.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.mockk</groupId>
-                <artifactId>mockk</artifactId>
-                <version>${mockk.version}</version>
             </dependency>
             <dependency>
                 <groupId>net.bytebuddy</groupId>
@@ -438,10 +427,6 @@
                             <goal>test-compile</goal>
                         </goals>
                         <configuration>
-                            <args>
-                                <!-- Workaround for bug in Kotlin compiler: https://youtrack.jetbrains.com/issue/KT-29475 -->
-                                <arg>-Xsanitize-parentheses</arg>
-                            </args>
                             <sourceDirs>
                                 <sourceDir>${project.basedir}/src/test/kotlin</sourceDir>
                                 <sourceDir>${project.basedir}/src/test/java</sourceDir>

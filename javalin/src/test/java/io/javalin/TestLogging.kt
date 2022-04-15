@@ -6,7 +6,6 @@
 
 package io.javalin
 
-import io.javalin.core.util.JavalinLogger
 import io.javalin.testing.HttpUtil
 import io.javalin.testing.TestLoggingUtil.captureStdOut
 import io.javalin.testing.TestUtil
@@ -22,7 +21,7 @@ class TestLogging {
     @Test
     fun `default logging works`() {
         val log = captureStdOut { runTest(Javalin.create()) }
-        println(log) // hard to test for absence ...
+        assertThat(log).contains("[main] INFO io.javalin.Javalin - Starting Javalin ...")
     }
 
     @Test
@@ -37,7 +36,6 @@ class TestLogging {
 
     @Test
     fun `dev logging works with inputstreams`() = TestUtil.test(Javalin.create { it.enableDevLogging() }) { app, http ->
-        JavalinLogger.enabled = true
         val fileStream = TestLogging::class.java.getResourceAsStream("/public/file")
         app.get("/") { it.result(fileStream) }
         val log = captureStdOut { http.getBody("/") }
@@ -48,14 +46,16 @@ class TestLogging {
     @Test
     fun `custom requestlogger is called`() {
         var loggerCalled = false
-        runTest(Javalin.create {
-            it.requestLogger { _, _ -> loggerCalled = true }
-        })
+        TestUtil.runAndCaptureLogs {
+            runTest(Javalin.create {
+                it.requestLogger { _, _ -> loggerCalled = true }
+            })
+        }
         assertThat(loggerCalled).isTrue()
     }
 
     private fun runTest(app: Javalin) {
-        app.get("/blocking") { ctx -> ctx.result("Hello Blocking World!") }
+        app.get("/blocking") { it.result("Hello Blocking World!") }
         app.get("/async") { ctx ->
             val future = CompletableFuture<String>()
             Executors.newSingleThreadScheduledExecutor().schedule<Boolean>({ future.complete("Hello Async World!") }, 10, TimeUnit.MILLISECONDS)
@@ -86,7 +86,6 @@ class TestLogging {
 
     @Test
     fun `debug logging works with binary stream`() = TestUtil.test(Javalin.create { it.enableDevLogging() }) { app, http ->
-        JavalinLogger.enabled = true
         app.get("/") {
             val imagePath = this::class.java.classLoader.getResource("upload-test/image.png")
             val stream = File(imagePath.toURI()).inputStream()
@@ -94,8 +93,7 @@ class TestLogging {
         }
         val log = captureStdOut {
             http.getBody("/")
-            http.getBody("/")
-            // TODO: why must this be called twice on windows to avoid empty log output?
+            http.getBody("/") // TODO: why must this be called twice on windows to avoid empty log output?
         }
         assertThat(log).contains("Body is binary (not logged)")
     }

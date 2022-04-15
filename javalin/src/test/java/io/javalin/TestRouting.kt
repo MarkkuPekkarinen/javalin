@@ -7,14 +7,15 @@
 
 package io.javalin
 
-import com.mashape.unirest.http.HttpMethod
 import io.javalin.apibuilder.ApiBuilder.after
 import io.javalin.apibuilder.ApiBuilder.get
 import io.javalin.apibuilder.ApiBuilder.path
 import io.javalin.core.routing.MissingBracketsException
 import io.javalin.core.routing.ParameterNamesNotUniqueException
 import io.javalin.core.routing.WildcardBracketAdjacentException
+import io.javalin.http.HandlerType.TRACE
 import io.javalin.testing.TestUtil
+import kong.unirest.HttpMethod
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.assertj.core.api.Assertions.assertThat
@@ -31,7 +32,7 @@ class TestRouting {
 
     @Test
     fun `basic hello world works`() = TestUtil.test { app, http ->
-        app.get("/hello") { ctx -> ctx.result("Hello World") }
+        app.get("/hello") { it.result("Hello World") }
         assertThat(http.getBody("/hello")).isEqualTo("Hello World")
     }
 
@@ -44,14 +45,16 @@ class TestRouting {
         app.patch("/mapped", TestUtil.okHandler)
         app.head("/mapped", TestUtil.okHandler)
         app.options("/mapped", TestUtil.okHandler)
-        for (httpMethod in HttpMethod.values()) {
+        app.addHandler(TRACE, "/mapped", TestUtil.okHandler)
+
+        for (httpMethod in http.allMethods()) {
             assertThat(http.call(httpMethod, "/mapped").status).isEqualTo(200)
         }
     }
 
     @Test
     fun `all unmapped verbs return 404`() = TestUtil.test { _, http ->
-        for (httpMethod in HttpMethod.values()) {
+        for (httpMethod in http.allMethods()) {
             assertThat(http.call(httpMethod, "/unmapped").status).isEqualTo(404)
         }
     }
@@ -64,7 +67,7 @@ class TestRouting {
 
     @Test
     fun `urls are case sensitive`() = TestUtil.test { app, http ->
-        app.get("/My-Url") { ctx -> ctx.result("OK") }
+        app.get("/My-Url") { it.result("OK") }
         assertThat(http.get("/My-Url").status).isEqualTo(200)
         assertThat(http.get("/MY-URL").status).isEqualTo(404)
         assertThat(http.get("/my-url").status).isEqualTo(404)
@@ -72,10 +75,10 @@ class TestRouting {
 
     @Test
     fun `filers are executed in order`() = TestUtil.test { app, http ->
-        app.before { ctx -> ctx.result("1") }
-        app.before { ctx -> ctx.result(ctx.resultString() + "2") }
-        app.get("/hello") { ctx -> ctx.result(ctx.resultString() + "Hello") }
-        app.after { ctx -> ctx.result(ctx.resultString() + "3") }
+        app.before { it.result("1") }
+        app.before { it.result(it.resultString() + "2") }
+        app.get("/hello") { it.result(it.resultString() + "Hello") }
+        app.after { it.result(it.resultString() + "3") }
         assertThat(http.getBody("/hello")).isEqualTo("12Hello3")
     }
 
@@ -88,7 +91,7 @@ class TestRouting {
 
     @Test
     fun `literal colon in path segment works`() = TestUtil.test { app, http ->
-        app.get("/hello:world") { ctx -> ctx.result("Hello World") }
+        app.get("/hello:world") { it.result("Hello World") }
         assertThat(http.getBody("/hello:world")).isEqualTo("Hello World")
     }
 
@@ -126,33 +129,33 @@ class TestRouting {
 
     @Test
     fun `utf-8 encoded path-params work`() = TestUtil.test { app, http ->
-        app.get("/{path-param}") { ctx -> ctx.result(ctx.pathParam("path-param")) }
+        app.get("/{path-param}") { it.result(it.pathParam("path-param")) }
         assertThat(okHttp.getBody(http.origin + "/" + URLEncoder.encode("TE/ST", "UTF-8"))).isEqualTo("TE/ST")
     }
 
     @Test
     fun `path-params work case-sensitive`() = TestUtil.test { app, http ->
-        app.get("/{userId}") { ctx -> ctx.result(ctx.pathParam("userId")) }
+        app.get("/{userId}") { it.result(it.pathParam("userId")) }
         assertThat(http.getBody("/path-param")).isEqualTo("path-param")
-        app.get("/{a}/{A}") { ctx -> ctx.result("${ctx.pathParam("a")}-${ctx.pathParam("A")}") }
+        app.get("/{a}/{A}") { it.result("${it.pathParam("a")}-${it.pathParam("A")}") }
         assertThat(http.getBody("/a/B")).isEqualTo("a-B")
     }
 
     @Test
     fun `path-param values retain their casing`() = TestUtil.test { app, http ->
-        app.get("/{path-param}") { ctx -> ctx.result(ctx.pathParam("path-param")) }
+        app.get("/{path-param}") { it.result(it.pathParam("path-param")) }
         assertThat(http.getBody("/SomeCamelCasedValue")).isEqualTo("SomeCamelCasedValue")
     }
 
     @Test
     fun `path-params can be combined with regular content`() = TestUtil.test { app, http ->
-        app.get("/hi-{name}") { ctx -> ctx.result(ctx.pathParam("name")) }
+        app.get("/hi-{name}") { it.result(it.pathParam("name")) }
         assertThat(http.getBody("/hi-world")).isEqualTo("world")
     }
 
     @Test
     fun `path-params can be combined with wildcards`() = TestUtil.test { app, http ->
-        app.get("/hi-{name}-*") { ctx -> ctx.result(ctx.pathParam("name")) }
+        app.get("/hi-{name}-*") { it.result(it.pathParam("name")) }
         assertThat(http.get("/hi-world").status).isEqualTo(404)
         val response = http.get("/hi-world-not-included")
         assertThat(response.status).isEqualTo(200)
@@ -161,13 +164,13 @@ class TestRouting {
 
     @Test
     fun `path-params support stars in names`() = TestUtil.test { app, http ->
-        app.get("/hi-{name*}") { ctx -> ctx.result(ctx.pathParam("name*")) }
+        app.get("/hi-{name*}") { it.result(it.pathParam("name*")) }
         assertThat(http.getBody("/hi-world")).isEqualTo("world")
     }
 
     @Test
     fun `percentage operator does not consume text`() = TestUtil.test { app, http ->
-        app.get("/{name}*") { ctx -> ctx.result(ctx.pathParam("name")) }
+        app.get("/{name}*") { it.result(it.pathParam("name")) }
         assertThat(http.getBody("/text")).isEqualTo("text")
         assertThat(http.getBody("/text/two")).isEqualTo("text")
     }
@@ -175,25 +178,25 @@ class TestRouting {
     @Test
     fun `path-params cannot directly follow a wildcard`() = TestUtil.test { app, _ ->
         assertThrows<WildcardBracketAdjacentException> {
-            app.get("/*{name}") { ctx -> ctx.result(ctx.pathParam("name")) }
+            app.get("/*{name}") { it.result(it.pathParam("name")) }
         }
     }
 
     @Test
     fun `angle-bracket path-params can accept slashes`() = TestUtil.test { app, http ->
-        app.get("/<name>") { ctx -> ctx.result(ctx.pathParam("name")) }
+        app.get("/<name>") { it.result(it.pathParam("name")) }
         assertThat(http.getBody("/hi/with/slashes")).isEqualTo("hi/with/slashes")
     }
 
     @Test
     fun `angle-bracket path-params can be combined with regular content`() = TestUtil.test { app, http ->
-        app.get("/hi/<name>") { ctx -> ctx.result(ctx.pathParam("name")) }
+        app.get("/hi/<name>") { it.result(it.pathParam("name")) }
         assertThat(http.getBody("/hi/with/slashes")).isEqualTo("with/slashes")
     }
 
     @Test
     fun `angle-bracket path-params can be combined with wildcards`() = TestUtil.test { app, http ->
-        app.get("/hi-<name>-*") { ctx -> ctx.result(ctx.pathParam("name")) }
+        app.get("/hi-<name>-*") { it.result(it.pathParam("name")) }
         assertThat(http.get("/hi-world").status).isEqualTo(404)
         val response = http.get("/hi-world/hi-not-included")
         assertThat(response.status).isEqualTo(200)
@@ -204,7 +207,7 @@ class TestRouting {
     @Disabled
     @Test
     fun `path regex works`() = TestUtil.test { app, http ->
-        app.get("/{path-param}/[0-9]+/") { ctx -> ctx.result(ctx.pathParam("path-param")) }
+        app.get("/{path-param}/[0-9]+/") { it.result(it.pathParam("path-param")) }
         assertThat(http.get("/test/pathParam").status).isEqualTo(404)
         assertThat(http.get("/test/21").body).isEqualTo("test")
     }
@@ -214,9 +217,9 @@ class TestRouting {
         app.routes {
             path("test") {
                 path("{id}") {
-                    get { ctx -> ctx.result(ctx.pathParam("id")) }
+                    get { it.result(it.pathParam("id")) }
                 }
-                get { ctx -> ctx.result("test") }
+                get { it.result("test") }
             }
         }
         assertThat(http.getBody("/test/path-param/")).isEqualTo("path-param")
@@ -259,7 +262,7 @@ class TestRouting {
     @Test
     fun `path param names are required to be unique across path param types`() = TestUtil.test { app, _ ->
         assertThatExceptionOfType(ParameterNamesNotUniqueException::class.java).isThrownBy {
-            app.get("/{param}/demo/<param>") { ctx -> ctx.result(ctx.pathParam("param")) }
+            app.get("/{param}/demo/<param>") { it.result(it.pathParam("param")) }
         }
     }
 
@@ -273,7 +276,7 @@ class TestRouting {
             "/</>"
         ).forEach {
             assertThatExceptionOfType(MissingBracketsException::class.java).describedAs(it).isThrownBy {
-                app.get(it) { ctx -> ctx.result("") }
+                app.get(it) { it.result("") }
             }
         }
     }

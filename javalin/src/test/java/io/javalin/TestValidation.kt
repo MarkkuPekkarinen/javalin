@@ -8,9 +8,6 @@ package io.javalin
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
-import io.javalin.core.util.JavalinLogger
 import io.javalin.core.validation.JavalinValidation
 import io.javalin.core.validation.NullableValidator
 import io.javalin.core.validation.ValidationError
@@ -20,6 +17,7 @@ import io.javalin.core.validation.collectErrors
 import io.javalin.plugin.json.JavalinJackson
 import io.javalin.testing.SerializableObject
 import io.javalin.testing.TestUtil
+import io.javalin.testing.fasterJacksonMapper
 import org.assertj.core.api.Assertions.assertThat
 import org.eclipse.jetty.http.HttpStatus
 import org.junit.jupiter.api.Test
@@ -31,21 +29,20 @@ class TestValidation {
 
     @Test
     fun `pathParam gives correct error message`() = TestUtil.test { app, http ->
-        app.get("/{param}") { ctx -> ctx.pathParamAsClass<Int>("param").get() }
+        app.get("/{param}") { it.pathParamAsClass<Int>("param").get() }
         assertThat(http.get("/abc").body).isEqualTo("""{"param":[{"message":"TYPE_CONVERSION_FAILED","args":{},"value":"abc"}]}""")
     }
 
     @Test
     fun `queryParam gives correct error message`() = TestUtil.test { app, http ->
-        app.get("/") { ctx -> ctx.queryParamAsClass<Int>("param").get() }
+        app.get("/") { it.queryParamAsClass<Int>("param").get() }
         assertThat(http.get("/?param=abc").body).isEqualTo("""{"param":[{"message":"TYPE_CONVERSION_FAILED","args":{},"value":"abc"}]}""")
     }
 
     @Test
     fun `formParam gives correct error message`() = TestUtil.test { app, http ->
-        app.post("/") { ctx -> ctx.formParamAsClass<Int>("param").get() }
+        app.post("/") { it.formParamAsClass<Int>("param").get() }
         assertThat(http.post("/").body("param=abc").asString().body).isEqualTo("""{"param":[{"message":"TYPE_CONVERSION_FAILED","args":{},"value":"abc"}]}""")
-        JavalinLogger.enabled = true
         val log = TestUtil.captureStdOut { http.post("/").body("param=abc").asString().body }
         assertThat(log).contains("Parameter 'param' with value 'abc' is not a valid Integer")
 
@@ -53,14 +50,14 @@ class TestValidation {
 
     @Test
     fun `notNullOrEmpty works for Validator`() = TestUtil.test { app, http ->
-        app.get("/") { ctx -> ctx.queryParamAsClass<String>("my-qp").get() }
+        app.get("/") { it.queryParamAsClass<String>("my-qp").get() }
         assertThat(http.get("/").body).isEqualTo("""{"my-qp":[{"message":"NULLCHECK_FAILED","args":{},"value":null}]}""")
         assertThat(http.get("/").status).isEqualTo(400)
     }
 
     @Test
     fun `notNullOrEmpty works for NullableValidator`() = TestUtil.test { app, http ->
-        app.get("/") { ctx -> ctx.queryParamAsClass<String>("my-qp").allowNullable().get() }
+        app.get("/") { it.queryParamAsClass<String>("my-qp").allowNullable().get() }
         assertThat(http.get("/").body).isEqualTo("")
         assertThat(http.get("/").status).isEqualTo(200)
     }
@@ -156,8 +153,8 @@ class TestValidation {
                 .get()
             ctx.result(obj.value1)
         }
-        val invalidJson = JavalinJackson().toJsonString(SerializableObject())
-        val validJson = JavalinJackson().toJsonString(SerializableObject().apply {
+        val invalidJson = fasterJacksonMapper.toJsonString(SerializableObject())
+        val validJson = fasterJacksonMapper.toJsonString(SerializableObject().apply {
             value1 = "Bananas"
         })
 
@@ -184,7 +181,7 @@ class TestValidation {
             {"message":"UnnamedFieldCheck1","args":{},"value":{"value1":"FirstValue","value2":"SecondValue"}},
             {"message":"UnnamedFieldCheck2","args":{},"value":{"value1":"First Value","value2":"SecondValue"}}],
             "named_field":[{"message":"NamedFieldCheck3","args":{},"value":{"value1":"FirstValue","value2":"SecondValue"}}]}""".replace("\\s".toRegex(), "")
-        val response = http.post("/json").body(JavalinJackson().toJsonString(SerializableObject())).asString().body
+        val response = http.post("/json").body(fasterJacksonMapper.toJsonString(SerializableObject())).asString().body
         assertThat(response).isEqualTo(expected)
     }
 
@@ -265,17 +262,9 @@ class TestValidation {
 
         http.get("/?number=7&first_name=my-overly-long-first-name").apply {
             assertThat(status).isEqualTo(200)
-
-            val errors = jacksonObjectMapper().readValue<Map<String, List<String>>>(body)
-
-            assertThat(errors).size().isEqualTo(2)
-            assertThat(errors.keys).contains("number", "first_name")
-
-            assertThat(errors["number"]).size().isEqualTo(2)
-            assertThat(errors["number"]).contains("must be greater than 12.", "must be even.")
-
-            assertThat(errors["first_name"]).size().isEqualTo(2)
-            assertThat(errors["first_name"]).contains("cannot contain hyphens.", "cannot be longer than 10 characters.")
+            assertThat(body).contains("number", "first_name")
+            assertThat(body).contains("must be greater than 12.", "must be even.")
+            assertThat(body).contains("cannot contain hyphens.", "cannot be longer than 10 characters.")
         }
     }
 

@@ -34,12 +34,17 @@ class TestWebBrowser {
         @BeforeAll
         @JvmStatic
         fun setupClass() {
-            val os: String = System.getProperty("os.name", "generic").toLowerCase(Locale.ENGLISH)
+            assumeTrue(System.getProperty("RunningOnCi") == null)
+            val os: String = System.getProperty("os.name", "generic").lowercase(Locale.ENGLISH)
             assumeTrue("mac" !in os && "darwin" !in os)
             WebDriverManager.chromedriver().setup()
             driver = ChromeDriver(ChromeOptions().apply {
+                // GH-1488, details about flags: https://stackoverflow.com/questions/50642308/webdriverexception-unknown-error-devtoolsactiveport-file-doesnt-exist-while-t
+                addArguments("--no-sandbox")
+                addArguments("--disable-dev-shm-usage")
                 addArguments("--headless")
                 addArguments("--disable-gpu")
+                addArguments("--remote-debugging-port=9222") // Disables lookup for DevToolsActivePort file at all
             })
         }
 
@@ -54,24 +59,28 @@ class TestWebBrowser {
 
     @Test
     fun `hello world works in chrome`() = TestUtil.test { app, http ->
-        app.get("/hello") { ctx -> ctx.result("Hello, Selenium!") }
+        app.get("/hello") { it.result("Hello, Selenium!") }
         driver.get(http.origin + "/hello")
         assertThat(driver.pageSource).contains("Hello, Selenium")
     }
 
     @Test
     fun `brotli works in chrome`() {
-        val payload = "Hello, Selenium!".repeat(150)
-        val app = Javalin.create {
-            it.compressionStrategy(Brotli(4), null)
-            it.enableDevLogging()
-        }.start(0)
-        app.get("/hello") { ctx -> ctx.result(payload) }
-        val logResult = captureStdOut { driver.get("http://localhost:" + app.port() + "/hello") }
-        assertThat(driver.pageSource).contains(payload)
-        assertThat(logResult).contains("Content-Encoding=br")
-        assertThat(logResult).contains("Body is brotlied (${payload.length} bytes, not logged)")
-        app.stop();
+        TestUtil.runAndCaptureLogs {
+            val payload = "Hello, Selenium!".repeat(150)
+            val app = Javalin.create {
+                it.compressionStrategy(Brotli(4), null)
+                it.enableDevLogging()
+            }.start(0)
+            app.get("/hello") { it.result(payload) }
+            val logResult = captureStdOut {
+                driver.get("http://localhost:" + app.port() + "/hello")
+            }
+            assertThat(driver.pageSource).contains(payload)
+            assertThat(logResult).contains("Content-Encoding=br")
+            assertThat(logResult).contains("Body is brotlied (${payload.length} bytes, not logged)")
+            app.stop()
+        }
     }
 
     @Test

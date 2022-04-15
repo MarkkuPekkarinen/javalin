@@ -7,11 +7,11 @@
 
 package io.javalin
 
-import com.mashape.unirest.http.Unirest
 import io.javalin.core.LoomUtil
 import io.javalin.http.HttpCode
 import io.javalin.testing.TestServlet
 import io.javalin.testing.TestUtil
+import kong.unirest.Unirest
 import org.assertj.core.api.Assertions.assertThat
 import org.eclipse.jetty.server.ForwardedRequestCustomizer
 import org.eclipse.jetty.server.Handler
@@ -51,7 +51,7 @@ class TestCustomJetty {
     lateinit var workingDirectory: File
 
     @Test
-    fun `setting port works`() {
+    fun `setting port works`() = TestUtil.runLogLess {
         val port = (2000..9999).random()
         val app = Javalin.create().start(port).get("/") { it.result("PORT WORKS") }
         assertThat(Unirest.get("http://localhost:$port/").asString().body).isEqualTo("PORT WORKS")
@@ -59,7 +59,7 @@ class TestCustomJetty {
     }
 
     @Test
-    fun `setting host works`() {
+    fun `setting host works`() = TestUtil.runLogLess {
         val port = (2000..9999).random()
         val app = Javalin.create().start("127.0.0.1", port).get("/") { it.result("HOST WORKS") }
         assertThat(Unirest.get("http://127.0.0.1:$port/").asString().body).isEqualTo("HOST WORKS")
@@ -67,7 +67,7 @@ class TestCustomJetty {
     }
 
     @Test
-    fun `embedded server can have custom jetty Handler`() {
+    fun `embedded server can have custom jetty Handler`() = TestUtil.runLogLess {
         val statisticsHandler = StatisticsHandler()
         val newServer = Server().apply { handler = statisticsHandler }
         val app = Javalin.create { it.server { newServer } }.get("/") { it.result("Hello World") }.start(0)
@@ -83,7 +83,7 @@ class TestCustomJetty {
     }
 
     @Test
-    fun `embedded server can have custom jetty Handler chain`() {
+    fun `embedded server can have custom jetty Handler chain`() = TestUtil.runLogLess {
         val logCount = AtomicLong(0)
         val requestLogHandler = RequestLogHandler().apply { requestLog = RequestLog { _, _ -> logCount.incrementAndGet() } }
         val handlerChain = StatisticsHandler().apply { handler = requestLogHandler }
@@ -102,7 +102,7 @@ class TestCustomJetty {
     }
 
     @Test
-    fun `embedded server can have a wrapped handler collection`() {
+    fun `embedded server can have a wrapped handler collection`() = TestUtil.runLogLess {
         val handlerCollection = HandlerCollection()
         val handlerChain = StatisticsHandler().apply { handler = handlerCollection }
         val newServer = Server().apply { handler = handlerChain }
@@ -119,7 +119,7 @@ class TestCustomJetty {
     }
 
     @Test
-    fun `custom SessionHandler works`() {
+    fun `custom SessionHandler works`() = TestUtil.runLogLess {
         val newServer = Server()
         val fileSessionHandler = SessionHandler().apply {
             httpOnly = true
@@ -155,7 +155,7 @@ class TestCustomJetty {
 
         val javalin = Javalin.create { it.server { newServer } }
         TestUtil.test(javalin) { app, http ->
-            app.get("/bar") { ctx -> ctx.result("Hello") }
+            app.get("/bar") { it.result("Hello") }
             assertThat(http.getBody("/foo/foo")).isEqualTo("yo dude")
             assertThat(http.get("/foo/baz").status).isEqualTo(404)
             assertThat(http.getBody("/bar")).isEqualTo("Hello")
@@ -177,7 +177,7 @@ class TestCustomJetty {
             it.contextPath = "/api"
         }
         TestUtil.test(javalin) { app, http ->
-            app.get("/") { ctx -> ctx.result("Hello Javalin World!") }
+            app.get("/") { it.result("Hello Javalin World!") }
             assertThat(http.getBody("/api")).contains("Hello Javalin World!")
             assertThat(http.getBody("/other-servlet")).contains("Hello Servlet World!")
         }
@@ -185,11 +185,10 @@ class TestCustomJetty {
 
     @Test
     fun `default server uses loom if available`() {
-        if (!LoomUtil.loomAvailable) return;
-        val log = TestUtil.captureStdOut {
-            Javalin.create().start(0).stop()
-        }
-        assertThat(log).contains("Loom is available, using Virtual ThreadPool... Neat!")
+        if (!LoomUtil.loomAvailable) return
+        val defaultApp = Javalin.create()
+        TestUtil.test(defaultApp) { app, http -> } // start and stop default server
+        assertThat(defaultApp.attribute<String>("testlogs")).contains("Loom is available, using Virtual ThreadPool... Neat!")
     }
 
     @Test

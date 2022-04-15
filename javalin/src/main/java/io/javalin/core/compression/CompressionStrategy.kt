@@ -17,9 +17,6 @@ import io.javalin.core.util.Util
  */
 class CompressionStrategy(brotli: Brotli? = null, gzip: Gzip? = null) {
 
-    val brotli: Brotli?
-    val gzip: Gzip?
-
     companion object {
         @JvmField
         val NONE = CompressionStrategy()
@@ -28,11 +25,30 @@ class CompressionStrategy(brotli: Brotli? = null, gzip: Gzip? = null) {
         val GZIP = CompressionStrategy(null, Gzip())
     }
 
+    val brotli: Brotli?
+    val gzip: Gzip?
+
     init {
         //Enabling brotli requires special handling since jvm-brotli is platform dependent
         this.brotli = if (brotli != null) tryLoadBrotli(brotli) else null
         this.gzip = gzip
     }
+
+    /** 1500 is the size of a packet, compressing responses smaller than this serves no purpose */
+    var minSizeForCompression = 1500
+    /** Those mime types will be processed using NONE compression strategy */
+    var excludedMimeTypesFromCompression = listOf(
+        "image/",
+        "audio/",
+        "video/",
+        "application/compress",
+        "application/zip",
+        "application/gzip",
+        "application/bzip2",
+        "application/brotli",
+        "application/x-xz",
+        "application/x-rar-compressed"
+    )
 
     /**
      * When enabling Brotli, we try loading the jvm-brotli native library first.

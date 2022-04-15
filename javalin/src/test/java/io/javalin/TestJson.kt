@@ -8,12 +8,12 @@ package io.javalin
 
 import com.google.gson.GsonBuilder
 import io.javalin.core.util.Header
-import io.javalin.core.util.JavalinLogger
 import io.javalin.plugin.json.JavalinJackson
 import io.javalin.plugin.json.JsonMapper
 import io.javalin.testing.NonSerializableObject
 import io.javalin.testing.SerializableObject
 import io.javalin.testing.TestUtil
+import io.javalin.testing.fasterJacksonMapper
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import java.io.InputStream
@@ -21,11 +21,11 @@ import java.time.Instant
 
 class TestJson {
 
-    val serializableObjectString = JavalinJackson().toJsonString(SerializableObject())
+    val serializableObjectString = fasterJacksonMapper.toJsonString(SerializableObject())
 
     @Test
     fun `default mapper maps object to json`() = TestUtil.test { app, http ->
-        app.get("/") { ctx -> ctx.json(SerializableObject()) }
+        app.get("/") { it.json(SerializableObject()) }
         val response = http.get("/")
         assertThat(response.headers.getFirst(Header.CONTENT_TYPE)).isEqualTo("application/json")
         assertThat(response.body).isEqualTo(serializableObjectString)
@@ -33,7 +33,7 @@ class TestJson {
 
     @Test
     fun `default mapper can serialize instant`() = TestUtil.test { app, http ->
-        app.get("/") { ctx -> ctx.json(Instant.EPOCH) }
+        app.get("/") { it.json(Instant.EPOCH) }
         val response = http.get("/")
         assertThat(response.headers.getFirst(Header.CONTENT_TYPE)).isEqualTo("application/json")
         assertThat(response.body).isEqualTo("0.0")
@@ -41,7 +41,7 @@ class TestJson {
 
     @Test
     fun `default mapper treats strings as already being json`() = TestUtil.test { app, http ->
-        app.get("/") { ctx -> ctx.json("ok") }
+        app.get("/") { it.json("ok") }
         assertThat(http.getBody("/")).isEqualTo("ok")
     }
 
@@ -49,7 +49,7 @@ class TestJson {
     fun `default mapper doesn't deadlock when streaming large objects`() = TestUtil.test { app, http ->
         val big = mapOf("big" to "1".repeat(100_000))
         app.get("/") { it.jsonStream(big) }
-        assertThat(http.getBody("/")).isEqualTo(JavalinJackson().toJsonString(big))
+        assertThat(http.getBody("/")).isEqualTo(fasterJacksonMapper.toJsonString(big))
     }
 
     @Test
@@ -87,15 +87,13 @@ class TestJson {
 
     @Test
     fun `empty mapper throws exception`() = TestUtil.test(Javalin.create { it.jsonMapper(object : JsonMapper {}) }) { app, http ->
-        app.get("/") { ctx -> ctx.json("Test") }
+        app.get("/") { it.json("Test") }
         assertThat(http.getBody("/")).isEqualTo("")
         assertThat(http.get("/").status).isEqualTo(500)
     }
 
     @Test
     fun `empty mapper logs proper error messages`() = TestUtil.test(Javalin.create { it.jsonMapper(object : JsonMapper {}) }) { app, http ->
-        JavalinLogger.enabled = true
-
         var log = TestUtil.captureStdOut { app.get("/write-string") { it.json("") }.also { http.getBody("/write-string") } }
         assertThat(log).contains("JsonMapper#toJsonString not implemented")
 
@@ -162,7 +160,7 @@ class TestJson {
             override fun toJsonString(obj: Any) = gson.toJson(obj)
         }
         TestUtil.test(Javalin.create { it.jsonMapper(gsonMapper) }) { app, http ->
-            app.get("/") { ctx -> ctx.json(SerializableObject()) }
+            app.get("/") { it.json(SerializableObject()) }
             assertThat(http.getBody("/")).isEqualTo(gson.toJson(SerializableObject()))
             app.post("/") { ctx ->
                 ctx.bodyAsClass(SerializableObject::class.java)

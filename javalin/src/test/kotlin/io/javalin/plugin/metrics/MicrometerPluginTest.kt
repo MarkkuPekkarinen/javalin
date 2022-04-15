@@ -12,9 +12,10 @@ class MicrometerPluginTest {
     @Test
     fun `test that JettyConnectionMetrics is registered`() {
         val registry = SimpleMeterRegistry()
+        val micrometerApp = Javalin.create { it.registerPlugin(MicrometerPlugin(registry)) }
 
-        TestUtil.test(Javalin.create { it.registerPlugin(MicrometerPlugin(registry)) }) { app, http ->
-            app.get("/test") { ctx -> ctx.json("Hello world") }
+        TestUtil.test(micrometerApp) { app, http ->
+            app.get("/test") { it.json("Hello world") }
             repeat(10) {
                 http.get("/test")
             }

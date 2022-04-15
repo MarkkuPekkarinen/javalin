@@ -17,7 +17,6 @@ class ExceptionMapper {
     val handlers = mutableMapOf<Class<out Exception>, ExceptionHandler<Exception>?>()
 
     internal fun handle(exception: Exception, ctx: Context) {
-        ctx.inExceptionHandler = true // prevent user from setting Future as result in exception handlers
         if (HttpResponseExceptionMapper.canHandle(exception) && noUserHandler(exception)) {
             HttpResponseExceptionMapper.handle(exception, ctx)
         } else {
@@ -29,13 +28,6 @@ class ExceptionMapper {
                 HttpResponseExceptionMapper.handle(InternalServerErrorResponse(), ctx)
             }
         }
-        ctx.inExceptionHandler = false
-    }
-
-    internal inline fun catchException(ctx: Context, func: () -> Unit) = try {
-        func.invoke()
-    } catch (e: Exception) {
-        handle(e, ctx)
     }
 
     internal fun handleFutureException(ctx: Context, throwable: Throwable): Nothing? {
@@ -48,8 +40,10 @@ class ExceptionMapper {
     }
 
     internal fun handleUnexpectedThrowable(res: HttpServletResponse, throwable: Throwable): Nothing? {
-        if (JettyUtil.isClientAbortException(throwable)) return null // jetty aborts aren't actually unexpected
-        if (JettyUtil.isJettyTimeoutException(throwable)) return null // jetty timeouts aren't actually unexpected
+        if (JettyUtil.isClientAbortException(throwable) || JettyUtil.isJettyTimeoutException(throwable)) {
+            JavalinLogger.debug("Client aborted or timed out", throwable)
+            return null // jetty aborts and timeouts happen when clients disconnect, they are not actually unexpected
+        }
         res.status = 500
         JavalinLogger.error("Exception occurred while servicing http-request", throwable)
         return null

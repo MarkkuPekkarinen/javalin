@@ -25,7 +25,7 @@ import javax.servlet.ServletResponse
 class TestConfigureServletContextHandler {
 
     @Test
-    fun `adding an event listener to the ServletContextHandler works`() {
+    fun `adding an event listener to the ServletContextHandler works`() = TestUtil.runLogLess {
         val listener = object : ServletContextListener {
             var called = false
             override fun contextInitialized(ev: ServletContextEvent?) {
@@ -44,7 +44,7 @@ class TestConfigureServletContextHandler {
         }.start(0)
 
         val http = HttpUtil(app.port())
-        http.htmlGet("/");
+        http.htmlGet("/")
 
         assertThat(listener.called).isTrue()
     }
@@ -77,7 +77,7 @@ class TestConfigureServletContextHandler {
 
         TestUtil.test(filterJavalin) { app, http ->
             app.get("/test") { it.result("Test") }
-            val response = http.get("/test");
+            val response = http.get("/test")
             assertThat(response.body).isEqualTo("Test")
             assertThat(filter.initialized).isTrue()
             assertThat(filter.called).isTrue()

@@ -1,130 +1,77 @@
 package io.javalin.http
 
-import com.nixxcode.jvmbrotli.enc.BrotliOutputStream
-import com.nixxcode.jvmbrotli.enc.Encoder
 import io.javalin.core.JavalinConfig
-import io.javalin.core.util.Header.ACCEPT_ENCODING
+import io.javalin.core.compression.CompressedStream
 import io.javalin.core.util.Header.CONTENT_ENCODING
 import io.javalin.core.util.Header.ETAG
 import io.javalin.core.util.Header.IF_NONE_MATCH
 import io.javalin.core.util.Util
+import io.javalin.http.HandlerType.GET
+import io.javalin.http.HttpCode.NOT_MODIFIED
 import java.io.InputStream
-import java.io.OutputStream
-import java.util.zip.GZIPOutputStream
 import javax.servlet.ServletOutputStream
 import javax.servlet.WriteListener
-import javax.servlet.http.HttpServletRequest
 import javax.servlet.http.HttpServletResponse
 import javax.servlet.http.HttpServletResponseWrapper
 
-private const val BR = "br"
-private const val GZIP = "gzip"
+class JavalinResponseWrapper(private val ctx: Context, private val config: JavalinConfig, private val requestType: HandlerType) : HttpServletResponseWrapper(ctx.res) {
 
-class ResponseWrapperContext(request: HttpServletRequest, val config: JavalinConfig) {
-    val acceptsBrotli by lazy { request.getHeader(ACCEPT_ENCODING)?.contains(BR, ignoreCase = true) == true }
-    val acceptsGzip by lazy { request.getHeader(ACCEPT_ENCODING)?.contains(GZIP, ignoreCase = true) == true }
-    val clientEtag by lazy { request.getHeader(IF_NONE_MATCH) ?: "" }
-    val type by lazy { HandlerType.fromServletRequest(request) }
-    val compStrat = config.inner.compressionStrategy
-}
-
-class JavalinResponseWrapper(val res: HttpServletResponse, private val rwc: ResponseWrapperContext) : HttpServletResponseWrapper(res) {
-
-    private val outputStreamWrapper by lazy { OutputStreamWrapper(res, rwc) }
+    private val outputStreamWrapper by lazy { OutputStreamWrapper(config, ctx) }
     override fun getOutputStream() = outputStreamWrapper
 
-    fun write(resultStream: InputStream?) {
-        if (resultStream == null) return
-        var inputStream = resultStream
-        if (res.getHeader(ETAG) != null || (rwc.config.autogenerateEtags && rwc.type == HandlerType.GET)) {
-            val serverEtag: String
-            if (res.getHeader(ETAG) != null) {
-                serverEtag = res.getHeader(ETAG)
-            } else {
-                //we must load and wrap the whole input stream into memory in order to generate the etag based on the whole content
-                inputStream = resultStream.readBytes().inputStream()
-                resultStream.close() //close original stream, it was already copied to byte array
-                serverEtag = Util.getChecksumAndReset(inputStream)
-            }
-            res.setHeader(ETAG, serverEtag)
-            if (serverEtag == rwc.clientEtag) {
-                res.status = 304
-                inputStream.close()
-                return // don't write body
+    private val serverEtag by lazy { getHeader(ETAG) }
+    private val clientEtag by lazy { ctx.req.getHeader(IF_NONE_MATCH) }
+
+    fun write(resultStream: InputStream?) = when {
+        resultStream == null -> {} // nothing to write (and nothing to close)
+        serverEtag != null && serverEtag == clientEtag -> closeWith304(resultStream) // client etag matches, nothing to write
+        serverEtag == null && requestType == GET && config.autogenerateEtags -> generateEtagWriteAndClose(resultStream)
+        else -> writeToWrapperAndClose(resultStream)
+    }
+
+    private fun generateEtagWriteAndClose(resultStream: InputStream) {
+        val inputStream = resultStream.use { it.readBytes().inputStream() } // TODO: https://github.com/tipsy/javalin/issues/1505
+        val generatedEtag = Util.getChecksumAndReset(inputStream)
+        setHeader(ETAG, generatedEtag)
+        when (generatedEtag) {
+            clientEtag -> closeWith304(inputStream)
+            else -> writeToWrapperAndClose(inputStream)
+        }
+    }
+
+    private fun writeToWrapperAndClose(inputStream: InputStream) {
+        inputStream.use { input ->
+            outputStreamWrapper.use { output ->
+                input.copyTo(output)
             }
         }
-        inputStream.copyTo(outputStreamWrapper)
-        inputStream.close()
-        outputStreamWrapper.finalizeCompression()
+    }
+
+    private fun closeWith304(inputStream: InputStream) {
+        inputStream.use { ctx.status(NOT_MODIFIED) }
     }
 
 }
 
-class OutputStreamWrapper(val res: HttpServletResponse, private val rwc: ResponseWrapperContext) : ServletOutputStream() {
+class OutputStreamWrapper(val config: JavalinConfig, val ctx: Context, val response: HttpServletResponse = ctx.res) : ServletOutputStream() {
+    private val compression = config.inner.compressionStrategy
+    private var compressedStream: CompressedStream? = null
 
-    private lateinit var compressingStream: OutputStream
-    private var initialized = false
-    private var brotliEnabled = false
-    private var gzipEnabled = false
-
-    companion object {
-        var minSizeForCompression = 1500 // 1500 is the size of a packet, compressing responses smaller than this serves no purpose
-        val excludedMimeTypes = setOf(
-            "image/",
-            "audio/",
-            "video/",
-            "application/compress",
-            "application/zip",
-            "application/gzip",
-            "application/bzip2",
-            "application/brotli",
-            "application/x-xz",
-            "application/x-rar-compressed"
-        )
+    override fun write(bytes: ByteArray, offset: Int, length: Int) {
+        if (compressedStream == null && length >= compression.minSizeForCompression && response.contentType.allowsForCompression()) {
+            compressedStream = CompressedStream.tryBrotli(compression, ctx) ?: CompressedStream.tryGzip(compression, ctx)
+            compressedStream?.let { response.setHeader(CONTENT_ENCODING, it.type.typeName) }
+        }
+        (compressedStream?.outputStream ?: response.outputStream).write(bytes, offset, length) // fall back to default stream if no compression
     }
 
-    override fun write(b: ByteArray, off: Int, len: Int) {
-        if (!initialized) { // set available compressors, content encoding, and compressing-stream
-            val isCompressible = len >= minSizeForCompression && !excludedMimeType(res.contentType ?: "") && res.getHeader(CONTENT_ENCODING).isNullOrEmpty()
-            if (isCompressible && rwc.acceptsBrotli && rwc.compStrat.brotli != null) {
-                res.setHeader(CONTENT_ENCODING, BR)
-                compressingStream = LeveledBrotliStream(res.outputStream, rwc.compStrat.brotli.level)
-                brotliEnabled = true
-            } else if (isCompressible && rwc.acceptsGzip && rwc.compStrat.gzip != null) {
-                res.setHeader(CONTENT_ENCODING, GZIP)
-                compressingStream = LeveledGzipStream(res.outputStream, rwc.compStrat.gzip.level)
-                gzipEnabled = true
-            }
-            initialized = true
-        }
-        when {
-            brotliEnabled -> (compressingStream as LeveledBrotliStream).write(b, off, len)
-            gzipEnabled -> (compressingStream as LeveledGzipStream).write(b, off, len)
-            else -> super.write(b, off, len) // no compression
-        }
-    }
+    private fun String?.allowsForCompression(): Boolean =
+        this == null || compression.excludedMimeTypesFromCompression.none { excluded -> this.contains(excluded, ignoreCase = true) }
 
-    fun finalizeCompression() {
-        when {
-            brotliEnabled && res.getHeader(CONTENT_ENCODING) == BR -> (compressingStream as BrotliOutputStream).close()
-            gzipEnabled && res.getHeader(CONTENT_ENCODING) == GZIP -> (compressingStream as LeveledGzipStream).close()
-        }
-    }
-
-    private fun excludedMimeType(mimeType: String) =
-        if (mimeType == "") false else excludedMimeTypes.any { excluded -> mimeType.contains(excluded, ignoreCase = true) }
-
-    override fun isReady(): Boolean = res.outputStream.isReady
-    override fun setWriteListener(writeListener: WriteListener?) = res.outputStream.setWriteListener(writeListener)
-    override fun write(b: Int) {
-        res.outputStream.write(b)
+    override fun write(byte: Int) = response.outputStream.write(byte)
+    override fun setWriteListener(writeListener: WriteListener?) = response.outputStream.setWriteListener(writeListener)
+    override fun isReady(): Boolean = response.outputStream.isReady
+    override fun close() {
+        compressedStream?.outputStream?.close()
     }
 }
-
-class LeveledGzipStream(out: OutputStream, level: Int) : GZIPOutputStream(out) {
-    init {
-        this.def.setLevel(level)
-    }
-}
-
-class LeveledBrotliStream(out: OutputStream, level: Int) : BrotliOutputStream(out, Encoder.Parameters().setQuality(level))

@@ -7,20 +7,17 @@
 
 package io.javalin
 
-import com.mashape.unirest.http.HttpMethod
-import com.mashape.unirest.http.Unirest
 import io.javalin.core.util.Header
 import io.javalin.http.ContentType
 import io.javalin.http.util.SeekableWriter
 import io.javalin.testing.TestUtil
-import org.apache.commons.io.FileUtils
-import org.apache.commons.io.IOUtils
+import kong.unirest.HttpMethod
+import kong.unirest.Unirest
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.*
 
@@ -54,22 +51,20 @@ class TestResponse {
             bytes[i] = (i % 256).toByte()
         }
 
-        app.get("/hello") { ctx -> ctx.result(bytes) }
-        val response = http.call(HttpMethod.GET, "/hello")
-        val bout = ByteArrayOutputStream()
-        assertThat(IOUtils.copy(response.rawBody, bout)).isEqualTo(bytes.size)
-        assertThat(bytes).isEqualTo(bout.toByteArray())
+        app.get("/hello") { it.result(bytes) }
+        val response = Unirest.get("${http.origin}/hello").asBytes()
+        assertThat(response.body.size).isEqualTo(bytes.size)
+        assertThat(bytes).isEqualTo(response.body)
     }
 
     @Test
     fun `setting an InputStream result works`() = TestUtil.test { app, http ->
         val buf = ByteArray(65537) // big and not on a page boundary
         Random().nextBytes(buf)
-        app.get("/stream") { ctx -> ctx.result(ByteArrayInputStream(buf)) }
-        val response = http.call(HttpMethod.GET, "/stream")
-        val bout = ByteArrayOutputStream()
-        assertThat(IOUtils.copy(response.rawBody, bout)).isEqualTo(buf.size)
-        assertThat(buf).isEqualTo(bout.toByteArray())
+        app.get("/stream") { it.result(ByteArrayInputStream(buf)) }
+        val response = Unirest.get("${http.origin}/stream").asBytes()
+        assertThat(response.body.size).isEqualTo(buf.size)
+        assertThat(buf).isEqualTo(response.body)
     }
 
     @Test
@@ -80,7 +75,7 @@ class TestResponse {
                     out.print("Hello, World!")
                 }
             }
-            ctx.result(FileUtils.openInputStream(file))
+            ctx.result(file.inputStream())
         }
         assertThat(http.getBody("/file")).isEqualTo("Hello, World!")
     }
@@ -105,8 +100,8 @@ class TestResponse {
 
     @Test
     fun `redirect in before-handler works`() = TestUtil.test { app, http ->
-        app.before("/before") { ctx -> ctx.redirect("/redirected") }
-        app.get("/redirected") { ctx -> ctx.result("Redirected") }
+        app.before("/before") { it.redirect("/redirected") }
+        app.get("/redirected") { it.result("Redirected") }
         assertThat(http.getBody("/before")).isEqualTo("Redirected")
     }
 
@@ -114,21 +109,21 @@ class TestResponse {
     fun `redirect in exception-mapper works`() = TestUtil.test { app, http ->
         app.get("/get") { throw Exception() }
         app.exception(Exception::class.java) { _, ctx -> ctx.redirect("/redirected") }
-        app.get("/redirected") { ctx -> ctx.result("Redirected") }
+        app.get("/redirected") { it.result("Redirected") }
         assertThat(http.getBody("/get")).isEqualTo("Redirected")
     }
 
     @Test
     fun `redirect in normal handler works`() = TestUtil.test { app, http ->
-        app.get("/hello") { ctx -> ctx.redirect("/hello-2") }
-        app.get("/hello-2") { ctx -> ctx.result("Redirected") }
+        app.get("/hello") { it.redirect("/hello-2") }
+        app.get("/hello-2") { it.result("Redirected") }
         assertThat(http.getBody("/hello")).isEqualTo("Redirected")
     }
 
     @Test
     fun `redirect with status works`() = TestUtil.test { app, http ->
-        app.get("/hello") { ctx -> ctx.redirect("/hello-2", 301) }
-        app.get("/hello-2") { ctx -> ctx.result("Redirected") }
+        app.get("/hello") { it.redirect("/hello-2", 301) }
+        app.get("/hello-2") { it.result("Redirected") }
         http.disableUnirestRedirects()
         assertThat(http.call(HttpMethod.GET, "/hello").status).isEqualTo(301)
         http.enableUnirestRedirects()
@@ -137,8 +132,8 @@ class TestResponse {
 
     @Test
     fun `redirect to absolute path works`() = TestUtil.test { app, http ->
-        app.get("/hello-abs") { ctx -> ctx.redirect("${http.origin}/hello-abs-2", 303) }
-        app.get("/hello-abs-2") { ctx -> ctx.result("Redirected") }
+        app.get("/hello-abs") { it.redirect("${http.origin}/hello-abs-2", 303) }
+        app.get("/hello-abs-2") { it.result("Redirected") }
         http.disableUnirestRedirects()
         assertThat(http.call(HttpMethod.GET, "/hello-abs").status).isEqualTo(303)
         http.enableUnirestRedirects()
@@ -164,7 +159,7 @@ class TestResponse {
 
     @Test
     fun `seekable - range works`() = TestUtil.test { app, http ->
-        app.get("/seekable") { ctx -> ctx.seekableStream(getSeekableInput(), ContentType.PLAIN) }
+        app.get("/seekable") { it.seekableStream(getSeekableInput(), ContentType.PLAIN) }
         val response = Unirest.get(http.origin + "/seekable")
             .headers(mapOf(Header.RANGE to "bytes=${SeekableWriter.chunkSize}-${SeekableWriter.chunkSize * 2 - 1}"))
             .asString().body
@@ -173,23 +168,23 @@ class TestResponse {
 
     @Test
     fun `seekable - no-range works`() = TestUtil.test { app, http ->
-        app.get("/seekable-2") { ctx -> ctx.seekableStream(getSeekableInput(), ContentType.PLAIN) }
+        app.get("/seekable-2") { it.seekableStream(getSeekableInput(), ContentType.PLAIN) }
         val response = Unirest.get(http.origin + "/seekable-2").asString().body
         assertThat(response.length).isEqualTo(getSeekableInput().available())
     }
 
     @Test
     fun `seekable - overreaching range works`() = TestUtil.test { app, http ->
-        app.get("/seekable-3") { ctx -> ctx.seekableStream(getSeekableInput(), ContentType.PLAIN) }
+        app.get("/seekable-3") { it.seekableStream(getSeekableInput(), ContentType.PLAIN) }
         val response = Unirest.get(http.origin + "/seekable-3")
             .headers(mapOf(Header.RANGE to "bytes=0-${SeekableWriter.chunkSize * 4}"))
-            .asString().body
-        assertThat(response.length).isEqualTo(SeekableWriter.chunkSize * 3)
+            .asBytes()
+        assertThat(response.body.size).isEqualTo(SeekableWriter.chunkSize * 3)
     }
 
     @Test
     fun `seekable - file smaller than chunksize works`() = TestUtil.test { app, http ->
-        app.get("/seekable-4") { ctx -> ctx.seekableStream(getSeekableInput(repeats = 50), ContentType.PLAIN) }
+        app.get("/seekable-4") { it.seekableStream(getSeekableInput(repeats = 50), ContentType.PLAIN) }
         val response = Unirest.get(http.origin + "/seekable-4")
             .headers(mapOf(Header.RANGE to "bytes=0-${SeekableWriter.chunkSize}"))
             .asString().body
@@ -200,7 +195,7 @@ class TestResponse {
     fun `seekable - large file works`() = TestUtil.test { app, http ->
         val prefixSize = 1L shl 31 //2GB
         val contentSize = 100L
-        app.get("/seekable-5") { ctx -> ctx.seekableStream(LargeSeekableInput(prefixSize, contentSize), ContentType.PLAIN, prefixSize + contentSize) }
+        app.get("/seekable-5") { it.seekableStream(LargeSeekableInput(prefixSize, contentSize), ContentType.PLAIN, prefixSize + contentSize) }
         val response = Unirest.get(http.origin + "/seekable-5")
                 .headers(mapOf(Header.RANGE to "bytes=${prefixSize}-${prefixSize + contentSize - 1}"))
                 .asString()
