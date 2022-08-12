@@ -7,8 +7,9 @@
 package io.javalin.testing
 
 import io.javalin.http.ContentType
-import io.javalin.http.HttpCode
+import io.javalin.http.HttpStatus
 import kong.unirest.HttpMethod
+import kong.unirest.HttpResponse
 import kong.unirest.Unirest
 
 class HttpUtil(port: Int) {
@@ -23,7 +24,7 @@ class HttpUtil(port: Int) {
     fun get(path: String) = Unirest.get(origin + path).asString()
     fun get(path: String, headers: Map<String, String>) = Unirest.get(origin + path).headers(headers).asString()
 
-    fun getStatus(path: String) = HttpCode.forStatus(get(path).status)
+    fun getStatus(path: String) = HttpStatus.forStatus(get(path).status)
     fun getBody(path: String) = Unirest.get(origin + path).asString().body
     fun getBody(path: String, headers: Map<String, String>) = Unirest.get(origin + path).headers(headers).asString().body
     fun post(path: String) = Unirest.post(origin + path)
@@ -33,3 +34,6 @@ class HttpUtil(port: Int) {
     fun sse(path: String) = Unirest.get(origin + path).header("Accept", "text/event-stream").header("Connection", "keep-alive").header("Cache-Control", "no-cache").asStringAsync()
 
 }
+
+fun HttpResponse<*>.httpCode(): HttpStatus =
+    HttpStatus.forStatus(this.status)

@@ -7,10 +7,10 @@
 package io.javalin.http.util
 
 import io.javalin.http.UploadedFile
+import jakarta.servlet.MultipartConfigElement
+import jakarta.servlet.http.HttpServletRequest
+import jakarta.servlet.http.Part
 import java.nio.charset.Charset
-import javax.servlet.MultipartConfigElement
-import javax.servlet.http.HttpServletRequest
-import javax.servlet.http.Part
 
 object MultipartUtil {
     private const val MULTIPART_CONFIG_ATTRIBUTE = "org.eclipse.jetty.multipartConfig"
@@ -18,19 +18,21 @@ object MultipartUtil {
     var preUploadFunction: (HttpServletRequest) -> Unit = { req ->
         val existingConfig = req.getAttribute(MULTIPART_CONFIG_ATTRIBUTE)
         if (existingConfig == null) {
-            req.setAttribute(MULTIPART_CONFIG_ATTRIBUTE,
-                    MultipartConfigElement(System.getProperty("java.io.tmpdir"), -1, -1, 1))
+            req.setAttribute(
+                MULTIPART_CONFIG_ATTRIBUTE,
+                MultipartConfigElement(System.getProperty("java.io.tmpdir"), -1, -1, 1)
+            )
         }
     }
 
     fun getUploadedFiles(req: HttpServletRequest, partName: String): List<UploadedFile> {
         preUploadFunction(req)
-        return req.parts.filter { isFile(it) && it.name == partName }.map(this::toUploadedFile)
+        return req.parts.filter { isFile(it) && it.name == partName }.map { UploadedFile(it) }
     }
 
     fun getUploadedFiles(req: HttpServletRequest): List<UploadedFile> {
         preUploadFunction(req)
-        return req.parts.filter(this::isFile).map(this::toUploadedFile)
+        return req.parts.filter(this::isFile).map { UploadedFile(it) }
     }
 
     fun getFieldMap(req: HttpServletRequest): Map<String, List<String>> {
@@ -40,18 +42,8 @@ object MultipartUtil {
 
     private fun getPartValue(req: HttpServletRequest, partName: String): List<String> {
         return req.parts.filter { isField(it) && it.name == partName }.map { filePart ->
-            filePart.inputStream.readBytes().toString(Charset.forName("UTF-8"))
+            filePart.inputStream.use { it.readBytes().toString(Charset.forName("UTF-8")) }
         }.toList()
-    }
-
-    private fun toUploadedFile(filePart: Part): UploadedFile {
-        return UploadedFile(
-            content = filePart.inputStream,
-            contentType = filePart.contentType,
-            filename = filePart.submittedFileName,
-            extension = filePart.submittedFileName.replaceBeforeLast(".", ""),
-            size = filePart.size
-        )
     }
 
     private fun isField(filePart: Part) = filePart.submittedFileName == null // this is what Apache FileUpload does ...

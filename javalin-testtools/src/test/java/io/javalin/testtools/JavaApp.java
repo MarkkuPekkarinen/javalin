@@ -8,8 +8,8 @@ import static io.javalin.apibuilder.ApiBuilder.get;
 // make it non static and do dependency injection or whatever
 public class JavaApp {
 
-    public static Javalin app = Javalin.create(javalin -> {
-        javalin.ignoreTrailingSlashes = false;
+    public Javalin app = Javalin.create(javalin -> {
+        javalin.routing.ignoreTrailingSlashes = false;
     }).routes(() -> {
         get("/hello", HelloController::hello);
     });

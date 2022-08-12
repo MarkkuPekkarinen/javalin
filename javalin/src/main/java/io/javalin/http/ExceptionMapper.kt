@@ -6,18 +6,22 @@
 
 package io.javalin.http
 
-import io.javalin.core.util.JavalinLogger
-import io.javalin.core.util.Util
 import io.javalin.jetty.JettyUtil
+import io.javalin.util.JavalinLogger
+import io.javalin.util.Util
+import jakarta.servlet.http.HttpServletResponse
 import java.util.concurrent.CompletionException
-import javax.servlet.http.HttpServletResponse
+
+class SkipHttpHandlerException : RuntimeException()
 
 class ExceptionMapper {
 
     val handlers = mutableMapOf<Class<out Exception>, ExceptionHandler<Exception>?>()
 
     internal fun handle(exception: Exception, ctx: Context) {
-        if (HttpResponseExceptionMapper.canHandle(exception) && noUserHandler(exception)) {
+        if (exception is SkipHttpHandlerException) {
+            // do nothing
+        } else if (HttpResponseExceptionMapper.canHandle(exception) && noUserHandler(exception)) {
             HttpResponseExceptionMapper.handle(exception, ctx)
         } else {
             val exceptionHandler = Util.findByClass(handlers, exception.javaClass)
@@ -32,7 +36,7 @@ class ExceptionMapper {
 
     internal fun handleFutureException(ctx: Context, throwable: Throwable): Nothing? {
         if (throwable is CompletionException && throwable.cause is Exception) {
-            handle(throwable.cause as Exception, ctx)
+            handleFutureException(ctx, throwable.cause as Exception)
         } else if (throwable is Exception) {
             handle(throwable, ctx)
         }

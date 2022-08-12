@@ -1,6 +1,6 @@
 [![Chat at https://discord.gg/sgak4e5NKv](https://img.shields.io/badge/chat-on%20Discord-%234cb697)](https://discord.gg/sgak4e5NKv)
 [![Chat at https://gitter.im/javalin-io/general](https://badges.gitter.im/javalin-io/general.svg)](https://gitter.im/javalin-io/general)
-[![CI](https://github.com/tipsy/javalin/workflows/Test%20all%20JDKs%20on%20all%20OSes/badge.svg)](https://github.com/tipsy/javalin/actions)
+[![CI](https://github.com/javalin/javalin/workflows/Test%20all%20JDKs%20on%20all%20OSes/badge.svg)](https://github.com/javalin/javalin/actions)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Maven](https://img.shields.io/maven-central/v/io.javalin/javalin.svg)](https://search.maven.org/#search%7Cgav%7C1%7Cg%3A%22io.javalin%22%20AND%20a%3A%22javalin%22)
 
@@ -34,14 +34,14 @@ General information:
 <dependency>
     <groupId>io.javalin</groupId>
     <artifactId>javalin</artifactId>
-    <version>4.6.0</version>
+    <version>4.6.4</version>
 </dependency>
 ```
 
 #### Gradle
 
 ```groovy
-implementation "io.javalin:javalin:4.6.0"
+implementation "io.javalin:javalin:4.6.4"
 ```
 
 ### Start programming (Java)
@@ -76,7 +76,7 @@ All examples are in Kotlin, but you can find them in Java in the documentation (
 val app = Javalin.create { config ->
     config.defaultContentType = "application/json"
     config.autogenerateEtags = true
-    config.addStaticFiles("/public")
+    config.staticFiles.add("/public")
     config.asyncRequestTimeout = 10_000L
     config.dynamicGzip = true
     config.enforceSsl = true
@@ -141,11 +141,6 @@ app.post("/upload") { ctx ->
     }
 }
 ```
-
-### OpenAPI (Swagger)
-
-Javalin has an OpenAPI (Swagger) plugin. Documentation can be enabled both through a DSL and through annotations,
-and Javalin can render docs using both SwaggerUI and ReDoc. Read more at https://javalin.io/plugins/openapi.
 
 ## Special thanks
 * Blake Mizerany, for creating [Sinatra](http://www.sinatrarb.com/)

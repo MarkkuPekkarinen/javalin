@@ -1,11 +1,9 @@
 package io.javalin
 
-import io.javalin.core.getPlugin
-import io.javalin.core.plugin.Plugin
-import io.javalin.core.plugin.PluginAlreadyRegisteredException
-import io.javalin.core.plugin.PluginInitLifecycleViolationException
-import io.javalin.core.plugin.PluginLifecycleInit
-import io.javalin.core.plugin.PluginNotFoundException
+import io.javalin.plugin.Plugin
+import io.javalin.plugin.PluginAlreadyRegisteredException
+import io.javalin.plugin.PluginInitException
+import io.javalin.plugin.PluginLifecycleInit
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.BeforeEach
@@ -44,8 +42,8 @@ class TestPlugins {
         val plugin2 = TestPlugin2()
 
         Javalin.create {
-            it.registerPlugin(plugin1)
-            it.registerPlugin(plugin2)
+            it.plugins.register(plugin1)
+            it.plugins.register(plugin2)
         }
 
         assertThat(calls).containsExactly(
@@ -61,7 +59,7 @@ class TestPlugins {
         var called = false
 
         Javalin.create {
-            it.registerPlugin {
+            it.plugins.register {
                 called = true
             }
         }
@@ -72,10 +70,10 @@ class TestPlugins {
     @Test
     fun `registerPlugin should throw error if plugin is already registered`() {
         Javalin.create {
-            it.registerPlugin(TestPlugin())
+            it.plugins.register(TestPlugin())
 
             assertThatThrownBy {
-                it.registerPlugin(TestPlugin())
+                it.plugins.register(TestPlugin())
             }.isEqualTo(PluginAlreadyRegisteredException(TestPlugin::class.java))
         }
     }
@@ -92,27 +90,8 @@ class TestPlugins {
         }
 
         assertThatThrownBy {
-            Javalin.create { it.registerPlugin(BadPlugin()) }
-        }.isEqualTo(PluginInitLifecycleViolationException(BadPlugin::class.java))
+            Javalin.create { it.plugins.register(BadPlugin()) }
+        }.isEqualTo(PluginInitException(BadPlugin::class.java))
     }
 
-    @Test
-    fun `getPlugin should return instance`() {
-        val plugin = TestPlugin()
-
-        val app = Javalin.create {
-            it.registerPlugin(plugin)
-        }
-
-        assertThat(app._conf.getPlugin<TestPlugin>()).isEqualTo(plugin)
-    }
-
-    @Test
-    fun `getPlugin should throw an error if instance does not exists`() {
-        val app = Javalin.create {}
-
-        assertThatThrownBy {
-            app._conf.getPlugin<TestPlugin>()
-        }.isEqualTo(PluginNotFoundException(TestPlugin::class.java))
-    }
 }

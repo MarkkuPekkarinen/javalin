@@ -7,7 +7,7 @@
 package io.javalin.examples
 
 import io.javalin.Javalin
-import io.javalin.core.util.FileUtil
+import io.javalin.util.FileUtil
 
 fun main() {
 
@@ -24,7 +24,7 @@ fun main() {
         }
         post("/") { ctx ->
             ctx.uploadedFiles("files").forEach {
-                FileUtil.streamToFile(it.content, "upload/${it.filename}")
+                FileUtil.streamToFile(it.content(), "upload/${it.filename()}")
             }
         }
     }.start(7070)

@@ -6,63 +6,56 @@
 
 package io.javalin
 
-import io.javalin.core.compression.CompressionStrategy
-import io.javalin.core.compression.Gzip
-import io.javalin.core.util.Header
-import io.javalin.core.util.RouteOverviewPlugin
+import io.javalin.compression.CompressionStrategy
+import io.javalin.compression.Gzip
+import io.javalin.http.Header
 import io.javalin.http.ContentType
 import io.javalin.http.staticfiles.Location
-import io.javalin.plugin.metrics.MicrometerPlugin
+import io.javalin.plugin.bundled.RouteOverviewPlugin
+import io.javalin.plugin.bundled.MicrometerPlugin
 import io.javalin.testing.TestUtil
+import jakarta.servlet.http.HttpSessionEvent
+import jakarta.servlet.http.HttpSessionListener
 import org.assertj.core.api.Assertions
 import org.assertj.core.api.Assertions.assertThat
 import org.eclipse.jetty.server.Server
 import org.eclipse.jetty.server.session.SessionHandler
 import org.junit.jupiter.api.Test
-import javax.servlet.http.HttpSessionEvent
-import javax.servlet.http.HttpSessionListener
 
 class TestConfiguration {
 
     @Test
     fun `test all config options`() = TestUtil.runLogLess {
         val app = Javalin.create {
-            // JavalinServlet
-            it.addSinglePageRoot("/", "/public/html.html")
-            it.addSinglePageRoot("/", "src/test/resources/public/html.html", Location.EXTERNAL)
-            it.addSinglePageHandler("/", {})
-            it.addStaticFiles("/public", Location.CLASSPATH)
-            it.addStaticFiles("src/test/resources/public", Location.EXTERNAL)
-            it.asyncRequestTimeout = 10_000L
-            it.autogenerateEtags = true
-            it.contextPath = "/"
-            it.defaultContentType = ContentType.PLAIN
-            it.enableCorsForAllOrigins()
-            it.enableDevLogging()
-            it.registerPlugin(RouteOverviewPlugin("/test"))
-            it.enableWebjars()
-            it.enforceSsl = true
-            it.prefer405over404 = false
-            it.requestLogger { ctx, timeInMs -> }
-            it.sessionHandler { SessionHandler() }
-            // WsServlet
-            it.wsFactoryConfig { factory -> }
-            it.wsLogger { ws -> }
-            // Server
-            it.server {
+            it.spaRoot.addFile("/", "/public/html.html")
+            it.spaRoot.addFile("/", "src/test/resources/public/html.html", Location.EXTERNAL)
+            it.spaRoot.addHandler("/", {})
+            it.staticFiles.add("/public", Location.CLASSPATH)
+            it.staticFiles.add("src/test/resources/public", Location.EXTERNAL)
+            it.staticFiles.enableWebjars()
+            it.plugins.register { }
+            it.http.asyncTimeout = 10_000L
+            it.http.generateEtags = true
+            it.http.defaultContentType = ContentType.PLAIN
+            it.plugins.enableCors { it.reflectClientOrigin = true }
+            it.plugins.enableDevLogging()
+            it.plugins.register(RouteOverviewPlugin("/test"))
+            it.plugins.enableSslRedirects()
+            it.http.prefer405over404 = false
+            it.requestLoggers.http { ctx, timeInMs -> }
+            it.requestLoggers.webSocket { ws -> }
+            it.plugins.register(MicrometerPlugin())
+            it.core.showJavalinBanner = false
+            it.routing.contextPath = "/"
+            it.jetty.sessionHandler { SessionHandler() }
+            it.jetty.wsFactoryConfig { factory -> }
+            it.jetty.server {
                 Server()
             }
-            it.registerPlugin(MicrometerPlugin())
-            // Misc
-            it.accessManager { _, _, _ -> }
-            it.showJavalinBanner = false
-            it.configureServletContextHandler { handler ->
+            it.jetty.contextHandlerConfig { handler ->
                 handler.addEventListener(object : HttpSessionListener {
-                    override fun sessionCreated(e: HttpSessionEvent?) {
-                    }
-
-                    override fun sessionDestroyed(e: HttpSessionEvent?) {
-                    }
+                    override fun sessionCreated(e: HttpSessionEvent?) {}
+                    override fun sessionDestroyed(e: HttpSessionEvent?) {}
                 })
             }
         }.start(0)
@@ -73,16 +66,16 @@ class TestConfiguration {
     @Test
     fun `compression strategy is set to gzip by default`() {
         val app = Javalin.create()
-        assertThat(app._conf.inner.compressionStrategy).isEqualTo(CompressionStrategy.GZIP)
+        assertThat(app.cfg.pvt.compressionStrategy).isEqualTo(CompressionStrategy.GZIP)
     }
 
     @Test
     fun `compression strategy can be customized by user`() {
         val app = Javalin.create {
-            it.compressionStrategy(null, Gzip(2))
+            it.compression.custom(CompressionStrategy(null, Gzip(2)))
         }
-        assertThat(app._conf.inner.compressionStrategy.gzip?.level).isEqualTo(2)
-        assertThat(app._conf.inner.compressionStrategy.brotli).isNull()
+        assertThat(app.cfg.pvt.compressionStrategy.gzip?.level).isEqualTo(2)
+        assertThat(app.cfg.pvt.compressionStrategy.brotli).isNull()
     }
 
     @Test
@@ -96,7 +89,7 @@ class TestConfiguration {
     fun `test contextResolvers config with custom settings`() {
         TestUtil.test(
             Javalin.create {
-                it.contextResolvers { resolvers ->
+                it.core.contextResolvers { resolvers ->
                     resolvers.ip = { "CUSTOM IP" }
                     resolvers.host = { "CUSTOM HOST" }
                 }
@@ -114,7 +107,7 @@ class TestConfiguration {
         TestUtil.test(
             Javalin.create {}
                 .get("/ip") { it.result(it.ip()) }
-                .get("/remote-ip") { it.result(it.req.remoteAddr) }
+                .get("/remote-ip") { it.result(it.req().remoteAddr) }
                 .get("/host") { it.result("${it.host()}") }
                 .get("/remote-host") { it.result("${it.header(Header.HOST)}") }
         ) { _, http ->

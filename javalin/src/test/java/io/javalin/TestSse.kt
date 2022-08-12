@@ -1,13 +1,14 @@
 package io.javalin
 
+import io.javalin.http.HttpStatus.OK
 import io.javalin.http.sse.SseClient
-import io.javalin.http.sse.SseHandler
 import io.javalin.testing.SerializableObject
 import io.javalin.testing.TestUtil
+import io.javalin.testing.httpCode
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.Timeout
-import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class TestSse {
 
@@ -74,8 +75,8 @@ class TestSse {
     @Test
     fun `default http status is 200`() = TestUtil.test { app, http ->
         app.sse("/sse") { it.doAndClose { it.sendEvent(event, data) } }
-        val status = http.sse("/sse").get().status
-        assertThat(status).isEqualTo(200)
+        val status = http.sse("/sse").get().httpCode()
+        assertThat(status).isEqualTo(OK)
     }
 
     @Test
@@ -108,17 +109,17 @@ class TestSse {
     }
 
     @Test
-    fun `send async data is properly processed`() = TestUtil.test { app, http ->
+    fun `sending async data is properly processed`() = TestUtil.test { app, http ->
         app.sse("/sse") {
             it.sendEvent("Sync event")
-            CompletableFuture.runAsync {
-                Thread.sleep(10)
+            it.ctx.async {
+                Thread.sleep(100)
                 it.sendEvent("Async event")
-                it.close()
             }
         }
 
         val body = http.sse("/sse").get().body
+
         assertThat(body.trim()).isEqualTo(
             """
             event: message
@@ -128,6 +129,25 @@ class TestSse {
             data: Async event
             """.trimIndent().trim()
         )
+    }
+
+    @Test
+    fun `user can freeze sse handler to leak sse client outside the handler`() = TestUtil.test { app, http ->
+        val clients = mutableListOf<SseClient>()
+
+        Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate({
+            clients.forEach {
+                it.sendComment("Emitted and closed!")
+                it.close()
+            }
+        }, 50L, 50L, TimeUnit.MILLISECONDS)
+
+        app.sse("/sse") { client ->
+            clients.add(client)
+            client.keepAlive()
+        }
+
+        assertThat(http.sse("/sse").get().body.trim()).isEqualTo(": Emitted and closed!")
     }
 
 }

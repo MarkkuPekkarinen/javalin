@@ -6,9 +6,6 @@
 
 package io.javalin.http
 
-import io.javalin.core.util.Header
-import javax.servlet.http.HttpServletRequest
-
 enum class HandlerType {
 
     GET, POST, PUT, PATCH, DELETE, HEAD, TRACE, CONNECT, OPTIONS, BEFORE, AFTER, INVALID;
@@ -19,11 +16,12 @@ enum class HandlerType {
     }
 
     companion object {
-        private val methodMap = values().map { it.toString() to it }.toMap()
-        fun fromServletRequest(httpRequest: HttpServletRequest): HandlerType {
-            val key = httpRequest.getHeader(Header.X_HTTP_METHOD_OVERRIDE) ?: httpRequest.method
-            return methodMap[key.uppercase()] ?: INVALID
-        }
+
+        private val methodMap = values().associateBy { it.toString() }
+
+        fun findByName(name: String): HandlerType =
+            methodMap[name.uppercase()] ?: INVALID
+
     }
 
 }

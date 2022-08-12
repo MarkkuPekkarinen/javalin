@@ -6,32 +6,32 @@
 
 package io.javalin.jetty
 
-import io.javalin.core.util.JavalinException
-import io.javalin.core.util.JavalinLogger
 import io.javalin.http.staticfiles.Location
 import io.javalin.http.staticfiles.StaticFileConfig
+import io.javalin.util.JavalinException
+import io.javalin.util.JavalinLogger
+import jakarta.servlet.http.HttpServletRequest
+import jakarta.servlet.http.HttpServletResponse
 import org.eclipse.jetty.server.Request
+import org.eclipse.jetty.server.Server
 import org.eclipse.jetty.server.handler.ResourceHandler
 import org.eclipse.jetty.util.URIUtil
 import org.eclipse.jetty.util.resource.EmptyResource
 import org.eclipse.jetty.util.resource.Resource
 import java.io.File
 import java.nio.file.AccessDeniedException
-import javax.servlet.http.HttpServletRequest
-import javax.servlet.http.HttpServletResponse
 import io.javalin.http.staticfiles.ResourceHandler as JavalinResourceHandler
 
 class JettyResourceHandler : JavalinResourceHandler {
 
-    init {
-        JettyUtil.disableJettyLogger()
+    override fun init(arguments: Map<String, Any>) {
+        handlers = configs.map { ConfigurableHandler(it, arguments["server"] as Server) }
     }
 
-    val handlers = mutableListOf<ConfigurableHandler>()
+    private val configs = mutableListOf<StaticFileConfig>()
+    lateinit var handlers: List<ConfigurableHandler>
 
-    override fun addStaticFileConfig(config: StaticFileConfig) {
-        handlers.add(ConfigurableHandler(config).apply { start() })
-    }
+    override fun addStaticFileConfig(config: StaticFileConfig) = configs.add(config)
 
     override fun handle(httpRequest: HttpServletRequest, httpResponse: HttpServletResponse): Boolean {
         val target = httpRequest.getAttribute("jetty-target") as String
@@ -64,16 +64,15 @@ class JettyResourceHandler : JavalinResourceHandler {
         this != null && this.isDirectory && handler.getResource("${target.removeSuffix("/")}/index.html")?.exists() == true
 }
 
-open class ConfigurableHandler(val config: StaticFileConfig) : ResourceHandler() {
+open class ConfigurableHandler(val config: StaticFileConfig, jettyServer: Server) : ResourceHandler() {
 
     init {
+        JavalinLogger.info("Static file handler added: ${config.refinedToString()}. File system location: '${getResourceBase(config)}'")
         resourceBase = getResourceBase(config)
         isDirAllowed = false
         isEtags = true
-        JavalinLogger.addDelayed {
-            JavalinLogger.info("Static file handler added: ${config.refinedToString()}. File system location: '${getResourceBase(config)}'")
-        }
-
+        server = jettyServer
+        start()
     }
 
     override fun getResource(path: String): Resource {

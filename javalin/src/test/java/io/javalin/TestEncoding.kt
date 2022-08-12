@@ -7,7 +7,7 @@
 
 package io.javalin
 
-import io.javalin.core.util.Header
+import io.javalin.http.Header
 import io.javalin.http.ContentType
 import io.javalin.testing.TestUtil
 import kong.unirest.Unirest
@@ -73,16 +73,16 @@ class TestEncoding {
     }
 
     @Test
-    fun `setting a default content-type works`() = TestUtil.test(Javalin.create { it.defaultContentType = ContentType.JSON }) { app, http ->
+    fun `setting a default content-type works`() = TestUtil.test(Javalin.create { it.http.defaultContentType = ContentType.JSON }) { app, http ->
         app.get("/default") { it.result("not json") }
         assertThat(http.get("/default").headers.getFirst(Header.CONTENT_TYPE)).contains(ContentType.JSON)
     }
 
     @Test
-    fun `content-type can be overridden in handler`() = TestUtil.test(Javalin.create { it.defaultContentType = ContentType.JSON }) { app, http ->
+    fun `content-type can be overridden in handler`() = TestUtil.test(Javalin.create { it.http.defaultContentType = ContentType.JSON }) { app, http ->
         app.get("/override") { ctx ->
-            ctx.res.characterEncoding = "utf-8"
-            ctx.res.contentType = ContentType.HTML
+            ctx.res().characterEncoding = "utf-8"
+            ctx.res().contentType = ContentType.HTML
         }
         assertThat(http.get("/override").headers.getFirst(Header.CONTENT_TYPE)).contains("utf-8")
         assertThat(http.get("/override").headers.getFirst(Header.CONTENT_TYPE)).contains(ContentType.HTML)

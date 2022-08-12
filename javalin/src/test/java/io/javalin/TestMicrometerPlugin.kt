@@ -6,18 +6,47 @@
 
 package io.javalin
 
+import io.javalin.http.HttpStatus.NOT_MODIFIED
+import io.javalin.http.HttpStatus.OK
 import io.javalin.http.NotFoundResponse
-import io.javalin.plugin.metrics.MicrometerPlugin
+import io.javalin.plugin.bundled.MicrometerPlugin
 import io.javalin.testing.TestUtil
+import io.javalin.testing.httpCode
 import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Tags
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
+import org.assertj.core.api.Assertions
 import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 
+/**
+ * TODO: Enable when Micrometer will provide support for Jetty 11
+ * ~ https://github.com/micrometer-metrics/micrometer/issues/3234
+ */
+@Disabled("Micrometer plugin is not supported on Jetty 11")
 class TestMicrometerPlugin {
 
     private val meterRegistry: MeterRegistry = SimpleMeterRegistry()
+
+    @Test
+    fun `test that JettyConnectionMetrics is registered`() {
+        val registry = SimpleMeterRegistry()
+        val micrometerApp = Javalin.create { it.plugins.register(MicrometerPlugin(registry)) }
+
+        TestUtil.test(micrometerApp) { app, http ->
+            app.get("/test") { it.json("Hello world") }
+            repeat(10) {
+                http.get("/test")
+            }
+        }
+
+        val maxConnectionGauge = registry.find("jetty.connections.max").gauge() ?: Assertions.fail("\"jetty.connections.max\" not found")
+        assertThat(maxConnectionGauge.value()).isGreaterThan(0.0)
+
+        val messagesOutCounter = registry.find("jetty.connections.messages.out").counter() ?: Assertions.fail("\"jetty.connections.messages.out\" not found")
+        assertThat(messagesOutCounter.count()).isGreaterThan(0.0)
+    }
 
     @Test
     fun `successful request`() = TestUtil.test(setupApp()) { app, http ->
@@ -38,7 +67,7 @@ class TestMicrometerPlugin {
     @Test
     fun `successful request with context path`() = TestUtil.test(setupApp(contextPath = "/api")) { app, http ->
         val requestCount = (2..9).random()
-        app.get("/hello") { it.status(200) }
+        app.get("/hello") { it.status(OK) }
         repeat(requestCount) { http.get("/api/hello") }
         val timerCount = meterRegistry.get("jetty.server.requests")
             .tag("uri", "/hello")
@@ -125,7 +154,7 @@ class TestMicrometerPlugin {
             val response = http.get("/hello")
             val etag = response.headers["ETag"]?.first() ?: ""
             val response2 = http.get("/hello", mapOf("If-None-Match" to etag))
-            assertThat(response2.status).isEqualTo(304)
+            assertThat(response2.httpCode()).isEqualTo(NOT_MODIFIED)
         }
         val redirCount = meterRegistry.get("jetty.server.requests")
             .tag("uri", "/hello")
@@ -165,7 +194,7 @@ class TestMicrometerPlugin {
     fun `not found tagged`() = TestUtil.test(setupApp(tagNotFoundMappedPaths = true)) { app, http ->
         val requestCount = (2..9).random()
         app.get("/hello/{name}") { ctx ->
-            if (ctx.pathParam("name") == "jon") ctx.status(200)
+            if (ctx.pathParam("name") == "jon") ctx.status(OK)
             else throw NotFoundResponse()
         }
         repeat(requestCount) {
@@ -208,8 +237,8 @@ class TestMicrometerPlugin {
         autoGenerateEtags: Boolean? = null,
         contextPath: String = "/"
     ) = Javalin.create { config ->
-        config.contextPath = contextPath
-        config.registerPlugin(
+        config.routing.contextPath = contextPath
+        config.plugins.register(
             MicrometerPlugin(
                 registry = meterRegistry,
                 tags = Tags.empty(),
@@ -218,7 +247,7 @@ class TestMicrometerPlugin {
                 tagNotFoundMappedPaths = tagNotFoundMappedPaths
             )
         )
-        if (autoGenerateEtags != null) config.autogenerateEtags = autoGenerateEtags
+        if (autoGenerateEtags != null) config.http.generateEtags = autoGenerateEtags
 
         // must manually delegate to Micrometer exception handler for exception tags to be correct
     }.exception(IllegalArgumentException::class.java) { e, ctx ->

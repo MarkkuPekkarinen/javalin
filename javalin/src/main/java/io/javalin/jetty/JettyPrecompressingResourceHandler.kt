@@ -1,20 +1,20 @@
 package io.javalin.jetty
 
-import io.javalin.core.compression.CompressionStrategy
-import io.javalin.core.compression.CompressionType
-import io.javalin.core.compression.LeveledBrotliStream
-import io.javalin.core.compression.LeveledGzipStream
-import io.javalin.core.util.Header
-import io.javalin.core.util.JavalinLogger
-import io.javalin.core.util.OptionalDependency
-import io.javalin.core.util.Util
+import io.javalin.compression.CompressionStrategy
+import io.javalin.compression.CompressionType
+import io.javalin.compression.LeveledBrotliStream
+import io.javalin.compression.LeveledGzipStream
+import io.javalin.http.Header
+import io.javalin.util.CoreDependency
+import io.javalin.util.DependencyUtil
+import io.javalin.util.JavalinLogger
+import jakarta.servlet.http.HttpServletRequest
+import jakarta.servlet.http.HttpServletResponse
 import org.eclipse.jetty.http.MimeTypes
 import org.eclipse.jetty.util.resource.Resource
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.util.concurrent.ConcurrentHashMap
-import javax.servlet.http.HttpServletRequest
-import javax.servlet.http.HttpServletResponse
 
 object JettyPrecompressingResourceHandler {
 
@@ -59,7 +59,7 @@ object JettyPrecompressingResourceHandler {
         if (resource.length() > resourceMaxSize) {
             JavalinLogger.warn(
                 "Static file '$target' is larger than configured max size for pre-compression ($resourceMaxSize bytes).\n" +
-                        "You can configure the max size with `JettyPrecompressingResourceHandler.resourceMaxSize = newMaxSize`."
+                    "You can configure the max size with `JettyPrecompressingResourceHandler.resourceMaxSize = newMaxSize`."
             )
             return null
         }
@@ -73,7 +73,7 @@ object JettyPrecompressingResourceHandler {
             type == CompressionType.GZIP -> {
                 LeveledGzipStream(byteArrayOutputStream, 9) // use max-level compression
             }
-            type == CompressionType.BR && Util.dependencyIsPresent(OptionalDependency.JVMBROTLI) -> {
+            type == CompressionType.BR && DependencyUtil.isPresent(CoreDependency.JVMBROTLI) -> {
                 LeveledBrotliStream(byteArrayOutputStream, 11) // use max-level compression
             }
             else -> byteArrayOutputStream

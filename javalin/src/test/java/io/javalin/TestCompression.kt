@@ -8,13 +8,13 @@ package io.javalin
 
 import com.nixxcode.jvmbrotli.common.BrotliLoader
 import com.nixxcode.jvmbrotli.dec.BrotliInputStream
-import io.javalin.core.compression.Brotli
-import io.javalin.core.compression.CompressionStrategy
-import io.javalin.core.compression.Gzip
-import io.javalin.core.util.FileUtil
-import io.javalin.core.util.Header
-import io.javalin.core.util.OptionalDependency
+import io.javalin.compression.Brotli
+import io.javalin.compression.CompressionStrategy
+import io.javalin.compression.Gzip
+import io.javalin.util.FileUtil
+import io.javalin.http.Header
 import io.javalin.http.staticfiles.Location
+import io.javalin.testing.TestDependency
 import io.javalin.testing.TestUtil
 import kong.unirest.Unirest
 import okhttp3.OkHttpClient
@@ -36,24 +36,24 @@ class TestCompression {
     private val testDocument = FileUtil.readResource("/public/html.html")
 
     private fun customCompressionApp(limit: Int): Javalin = Javalin.create {
-        it.inner.compressionStrategy.minSizeForCompression = limit
-        it.addStaticFiles("/public", Location.CLASSPATH)
+        it.pvt.compressionStrategy.minSizeForCompression = limit
+        it.staticFiles.add("/public", Location.CLASSPATH)
     }.addTestEndpoints()
 
     private fun superCompressingApp() = Javalin.create {
-        it.compressionStrategy(CompressionStrategy(Brotli(), Gzip()).apply { minSizeForCompression = 1 })
-        it.addStaticFiles("/public", Location.CLASSPATH)
+        it.compression.custom(CompressionStrategy(Brotli(), Gzip()).apply { minSizeForCompression = 1 })
+        it.staticFiles.add("/public", Location.CLASSPATH)
     }.addTestEndpoints()
 
     private fun brotliDisabledApp() = Javalin.create {
-        it.compressionStrategy(CompressionStrategy(null, Gzip()).apply { minSizeForCompression = testDocument.length })
-        it.addStaticFiles("/public", Location.CLASSPATH)
+        it.compression.custom(CompressionStrategy(null, Gzip()).apply { minSizeForCompression = testDocument.length })
+        it.staticFiles.add("/public", Location.CLASSPATH)
     }.addTestEndpoints()
 
     private fun etagApp() = Javalin.create {
-        it.inner.compressionStrategy.minSizeForCompression = testDocument.length
-        it.addStaticFiles("/public", Location.CLASSPATH)
-        it.autogenerateEtags = true
+        it.pvt.compressionStrategy.minSizeForCompression = testDocument.length
+        it.staticFiles.add("/public", Location.CLASSPATH)
+        it.http.generateEtags = true
     }.addTestEndpoints()
 
     private fun Javalin.addTestEndpoints() = this.apply {
@@ -86,6 +86,16 @@ class TestCompression {
     }
 
     @Test
+    fun `doesn't compress when compression is disabled`() = TestUtil.test(
+        Javalin.create { it.compression.none() }.addTestEndpoints()
+    ) { _, http ->
+        Unirest.get(http.origin + "/huge").header(Header.ACCEPT_ENCODING, "br, gzip").asString().let { response -> // dynamic
+            assertThat(response.body.length).isEqualTo(hugeLength)
+            assertThat(response.headers[Header.CONTENT_ENCODING]).isEmpty()
+        }
+    }
+
+    @Test
     fun `does gzip when Accept-Encoding header is set and size is big enough`() = TestUtil.test(superCompressingApp()) { _, http ->
         getResponse(http.origin, "/huge", "gzip").let { response -> // dynamic
             assertThat(response.headers[Header.CONTENT_ENCODING]).isEqualTo("gzip")
@@ -113,8 +123,8 @@ class TestCompression {
     @Test
     fun `doesn't gzip when gzip is disabled`() {
         val gzipDisabledApp = Javalin.create {
-            it.compressionStrategy(Brotli(), null)
-            it.addStaticFiles("/public", Location.CLASSPATH)
+            it.compression.brotliOnly()
+            it.staticFiles.add("/public", Location.CLASSPATH)
         }.addTestEndpoints()
         TestUtil.test(gzipDisabledApp) { _, http ->
             Unirest.get(http.origin + "/huge").header(Header.ACCEPT_ENCODING, "gzip").asString().let { response -> // dynamic
@@ -199,10 +209,10 @@ class TestCompression {
 
     @Test
     fun `gzip works for large static files`() {
-        val path = "/webjars/swagger-ui/${OptionalDependency.SWAGGERUI.version}/swagger-ui-bundle.js"
+        val path = "/webjars/swagger-ui/${TestDependency.swaggerVersion}/swagger-ui-bundle.js"
         val gzipWebjars = Javalin.create {
-            it.compressionStrategy(null, Gzip(6))
-            it.enableWebjars()
+            it.compression.gzipOnly()
+            it.staticFiles.enableWebjars()
         }
         TestUtil.test(gzipWebjars) { _, http ->
             assertValidGzipResponse(http.origin, path)
@@ -212,10 +222,10 @@ class TestCompression {
     @Test
     fun `brotli works for large static files`() {
         assumeTrue(BrotliLoader.isBrotliAvailable())
-        val path = "/webjars/swagger-ui/${OptionalDependency.SWAGGERUI.version}/swagger-ui-bundle.js"
+        val path = "/webjars/swagger-ui/${TestDependency.swaggerVersion}/swagger-ui-bundle.js"
         val compressedWebjars = Javalin.create {
-            it.compressionStrategy(Brotli(4), null)
-            it.enableWebjars()
+            it.compression.brotliOnly()
+            it.staticFiles.enableWebjars()
         }
         TestUtil.test(compressedWebjars) { _, http ->
             assertValidBrotliResponse(http.origin, path)
@@ -242,7 +252,7 @@ class TestCompression {
     @Test
     fun `doesn't compress media files`() {
         val mediaTestApp = Javalin.create {
-            it.addStaticFiles("/upload-test", Location.CLASSPATH)
+            it.staticFiles.add("/upload-test", Location.CLASSPATH)
         }
         TestUtil.test(mediaTestApp) { _, http ->
             assertUncompressedResponse(http.origin, "/image.png")
@@ -253,11 +263,11 @@ class TestCompression {
     @Test
     fun `doesn't compress pre-compressed files`() {
         val preCompressedTestApp = Javalin.create {
-            it.addStaticFiles("/public", Location.CLASSPATH)
-            it.enableWebjars()
+            it.staticFiles.add("/public", Location.CLASSPATH)
+            it.staticFiles.enableWebjars()
         }
         TestUtil.test(preCompressedTestApp) { _, http ->
-            assertUncompressedResponse(http.origin, "/webjars/swagger-ui/${OptionalDependency.SWAGGERUI.version}/swagger-ui.js.gz")
+            assertUncompressedResponse(http.origin, "/webjars/swagger-ui/${TestDependency.swaggerVersion}/swagger-ui.js.gz")
             assertUncompressedResponse(http.origin, "/readme.md.br")
         }
     }

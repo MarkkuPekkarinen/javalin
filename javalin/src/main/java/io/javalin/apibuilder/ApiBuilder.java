@@ -7,15 +7,14 @@
 package io.javalin.apibuilder;
 
 import io.javalin.Javalin;
-import io.javalin.core.security.AccessManager;
-import io.javalin.core.security.RouteRole;
 import io.javalin.http.Handler;
 import io.javalin.http.sse.SseClient;
+import io.javalin.security.AccessManager;
+import io.javalin.security.RouteRole;
 import io.javalin.websocket.WsConfig;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Deque;
-import java.util.Map;
 import java.util.function.Consumer;
 import org.jetbrains.annotations.NotNull;
 
@@ -51,7 +50,10 @@ public class ApiBuilder {
     }
 
     public static String prefixPath(@NotNull String path) {
-        return String.join("", pathDeque.get()) + ((path.startsWith("/") || path.isEmpty()) ? path : "/" + path);
+        if (!path.equals("*")) {
+            path = (path.startsWith("/") || path.isEmpty()) ? path : "/" + path;
+        }
+        return String.join("", pathDeque.get()) + path;
     }
 
     public static Javalin staticInstance() {
@@ -339,7 +341,7 @@ public class ApiBuilder {
      * @see <a href="https://javalin.io/documentation#handlers">Handlers in docs</a>
      */
     public static void before(@NotNull Handler handler) {
-        staticInstance().before(prefixPath("/*"), handler);
+        staticInstance().before(prefixPath("*"), handler);
     }
 
     /**
@@ -359,7 +361,7 @@ public class ApiBuilder {
      * @see <a href="https://javalin.io/documentation#handlers">Handlers in docs</a>
      */
     public static void after(@NotNull Handler handler) {
-        staticInstance().after(prefixPath("/*"), handler);
+        staticInstance().after(prefixPath("*"), handler);
     }
 
     // ********************************************************************************************
@@ -419,7 +421,7 @@ public class ApiBuilder {
      * The method can only be called inside a {@link Javalin#routes(EndpointGroup)}.
      */
     public Javalin wsBefore(@NotNull Consumer<WsConfig> wsConfig) {
-        return staticInstance().wsBefore(prefixPath("/*"), wsConfig);
+        return staticInstance().wsBefore(prefixPath("*"), wsConfig);
     }
 
     /**
@@ -435,7 +437,7 @@ public class ApiBuilder {
      * The method can only be called inside a {@link Javalin#routes(EndpointGroup)}.
      */
     public Javalin wsAfter(@NotNull Consumer<WsConfig> wsConfig) {
-        return staticInstance().wsAfter(prefixPath("/*"), wsConfig);
+        return staticInstance().wsAfter(prefixPath("*"), wsConfig);
     }
 
     // ********************************************************************************************
@@ -512,11 +514,10 @@ public class ApiBuilder {
         if (resourceBase.startsWith("{") || resourceBase.startsWith("<") || resourceBase.endsWith("}") || resourceBase.endsWith(">")) {
             throw new IllegalArgumentException("CrudHandler requires a resource base at the beginning of the provided path, e.g. '/users/{user-id}'");
         }
-        Map<CrudFunction, Handler> crudFunctions = CrudHandlerKt.getCrudFunctions(crudHandler, resourceId);
-        staticInstance().get(fullPath, crudFunctions.get(CrudFunction.GET_ONE), roles);
-        staticInstance().get(fullPath.replace(resourceId, ""), crudFunctions.get(CrudFunction.GET_ALL), roles);
-        staticInstance().post(fullPath.replace(resourceId, ""), crudFunctions.get(CrudFunction.CREATE), roles);
-        staticInstance().patch(fullPath, crudFunctions.get(CrudFunction.UPDATE), roles);
-        staticInstance().delete(fullPath, crudFunctions.get(CrudFunction.DELETE), roles);
+        staticInstance().get(fullPath, ctx -> crudHandler.getOne(ctx, ctx.pathParam(resourceId)), roles);
+        staticInstance().get(fullPath.replace(resourceId, ""), crudHandler::getAll, roles);
+        staticInstance().post(fullPath.replace(resourceId, ""), crudHandler::create, roles);
+        staticInstance().patch(fullPath, ctx -> crudHandler.update(ctx, ctx.pathParam(resourceId)), roles);
+        staticInstance().delete(fullPath, ctx -> crudHandler.delete(ctx, ctx.pathParam(resourceId)), roles);
     }
 }

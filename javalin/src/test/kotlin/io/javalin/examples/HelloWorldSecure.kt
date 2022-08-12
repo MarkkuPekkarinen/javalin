@@ -16,7 +16,7 @@ import org.eclipse.jetty.util.ssl.SslContextFactory
 // https://github.com/eclipse/jetty.project/blob/jetty-9.4.x/examples/embedded/src/main/java/org/eclipse/jetty/embedded/LikeJettyXml.java#L139-L163
 fun main() {
     val app = Javalin.create {
-        it.server {
+        it.jetty.server {
             val server = Server()
             val sslConnector = ServerConnector(server, sslContextFactory())
             sslConnector.port = 443
@@ -30,10 +30,10 @@ fun main() {
     app.get("/") { it.result("Hello World") } // valid endpoint for both connectors
 }
 
-private fun sslContextFactory(): SslContextFactory {
-    val sslContextFactory = SslContextFactory()
-    sslContextFactory.keyStorePath = HelloWorldSecure::class.java.getResource("/keystore.jks").toExternalForm()
-    sslContextFactory.setKeyStorePassword("password")
+private fun sslContextFactory(): SslContextFactory.Server {
+    val sslContextFactory = SslContextFactory.Server()
+    sslContextFactory.keyStorePath = HelloWorldSecure::class.java.getResource("/keystore.jks")!!.toExternalForm()
+    sslContextFactory.keyStorePassword = "password"
     return sslContextFactory
 }
 

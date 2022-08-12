@@ -9,7 +9,7 @@ package io.javalin.examples;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import io.javalin.Javalin;
-import io.javalin.plugin.json.JsonMapper;
+import io.javalin.json.JsonMapper;
 import java.util.Arrays;
 import org.jetbrains.annotations.NotNull;
 
@@ -32,7 +32,7 @@ public class HelloWorldGson {
             }
         };
 
-        Javalin app = Javalin.create(config -> config.jsonMapper(gsonMapper)).start(7070);
+        Javalin app = Javalin.create(config -> config.core.jsonMapper(gsonMapper)).start(7070);
         app.get("/", ctx -> ctx.json(Arrays.asList("a", "b", "c")));
 
     }

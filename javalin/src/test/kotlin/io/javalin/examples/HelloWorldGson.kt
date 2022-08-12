@@ -8,7 +8,7 @@ package io.javalin.examples
 
 import com.google.gson.GsonBuilder
 import io.javalin.Javalin
-import io.javalin.plugin.json.JsonMapper
+import io.javalin.json.JsonMapper
 import java.util.*
 
 fun main() {
@@ -16,11 +16,11 @@ fun main() {
     val gson = GsonBuilder().create()
 
     val gsonMapper = object : JsonMapper {
-        override fun <T> fromJsonString(json: String, targetClass: Class<T>): T = gson.fromJson(json, targetClass)
+        override fun <T : Any> fromJsonString(json: String, targetClass: Class<T>): T = gson.fromJson(json, targetClass)
         override fun toJsonString(obj: Any) = gson.toJson(obj)
     }
 
-    val app = Javalin.create { it.jsonMapper(gsonMapper) }.start(7070)
+    val app = Javalin.create { it.core.jsonMapper(gsonMapper) }.start(7070)
     app.get("/") { it.json(Arrays.asList("a", "b", "c")) }
 
 }

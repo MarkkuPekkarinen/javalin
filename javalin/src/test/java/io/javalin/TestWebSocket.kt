@@ -7,27 +7,33 @@
 package io.javalin
 
 import io.javalin.apibuilder.ApiBuilder.ws
-import io.javalin.core.util.Header
+import io.javalin.http.Header
 import io.javalin.http.UnauthorizedResponse
 import io.javalin.testing.SerializableObject
 import io.javalin.testing.TestUtil
 import io.javalin.testing.TypedException
 import io.javalin.testing.fasterJacksonMapper
 import io.javalin.websocket.WsContext
+import io.javalin.websocket.pingFutures
 import kong.unirest.Unirest
 import org.assertj.core.api.Assertions.assertThat
 import org.eclipse.jetty.websocket.api.CloseStatus
-import org.eclipse.jetty.websocket.api.MessageTooLargeException
 import org.eclipse.jetty.websocket.api.StatusCode
-import org.eclipse.jetty.websocket.api.WebSocketConstants
+import org.eclipse.jetty.websocket.api.exceptions.MessageTooLargeException
+import org.eclipse.jetty.websocket.api.util.WebSocketConstants
+import org.java_websocket.WebSocket
 import org.java_websocket.client.WebSocketClient
 import org.java_websocket.drafts.Draft_6455
+import org.java_websocket.framing.Framedata
 import org.java_websocket.handshake.ServerHandshake
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 import java.net.URI
+import java.nio.ByteBuffer
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -45,17 +51,17 @@ class TestWebSocket {
         return this.attribute(TestLogger::class.java.name)
     }
 
-    fun contextPathJavalin() = Javalin.create { it.contextPath = "/websocket" }
+    fun contextPathJavalin(): Javalin = Javalin.create { it.routing.contextPath = "/websocket" }
 
-    fun accessManagedJavalin() = Javalin.create().apply {
-        this._conf.accessManager { handler, ctx, roles ->
+    fun accessManagedJavalin(): Javalin = Javalin.create().apply {
+        this.cfg.core.accessManager { handler, ctx, roles ->
             this.logger().log.add("handling upgrade request ...")
             when {
+                ctx.queryParam("exception") == "true" -> throw UnauthorizedResponse()
                 ctx.queryParam("allowed") == "true" -> {
                     this.logger().log.add("upgrade request valid!")
                     handler.handle(ctx)
                 }
-                ctx.queryParam("exception") == "true" -> throw UnauthorizedResponse()
                 else -> this.logger().log.add("upgrade request invalid!")
             }
         }
@@ -134,7 +140,7 @@ class TestWebSocket {
 
     @Test
     fun `receive and send json messages`() = TestUtil.test(Javalin.create {
-        it.jsonMapper(fasterJacksonMapper)
+        it.core.jsonMapper(fasterJacksonMapper)
     }) { app, _ ->
         app.ws("/message") { ws ->
             ws.onMessage { ctx ->
@@ -276,7 +282,7 @@ class TestWebSocket {
 
     @Test
     fun `web socket logging works`() = TestUtil.test(Javalin.create().apply {
-        this._conf.wsLogger { ws ->
+        this.cfg.requestLoggers.webSocket { ws ->
             ws.onConnect { ctx -> this.logger().log.add(ctx.pathParam("param") + " connected") }
             ws.onClose { ctx -> this.logger().log.add(ctx.pathParam("param") + " disconnected") }
         }
@@ -293,7 +299,7 @@ class TestWebSocket {
     }
 
     @Test
-    fun `dev logging works for web sockets`() = TestUtil.test(Javalin.create { it.enableDevLogging() }) { app, _ ->
+    fun `dev logging works for web sockets`() = TestUtil.test(Javalin.create { it.plugins.enableDevLogging() }) { app, _ ->
         app.ws("/path/{param}") {}
         TestClient(app, "/path/0").connectAndDisconnect()
         TestClient(app, "/path/1?test=banana&hi=1&hi=2").connectAndDisconnect()
@@ -314,19 +320,23 @@ class TestWebSocket {
 
     @Test
     fun `custom WebSocketServletFactory works`() {
-        var err: Throwable? = Exception("Bang")
-        val maxTextSize = 1
+        var handlerError: Throwable? = null
+        val maxTextSize = 1L
+        val textToSend = "This text is far too long."
         val app = Javalin.create {
-            it.wsFactoryConfig { wsFactory ->
-                wsFactory.policy.maxTextMessageSize = maxTextSize
+            it.jetty.wsFactoryConfig { wsFactory ->
+                wsFactory.maxTextMessageSize = maxTextSize
             }
         }.ws("/ws") { ws ->
-            ws.onError { ctx -> err = ctx.error() }
+            ws.onError { ctx -> handlerError = ctx.error() }
         }
         TestUtil.test(app) { _, _ ->
-            TestClient(app, "/ws").connectSendAndDisconnect("This text is far too long.")
-            assertThat(err!!.message).isEqualTo("Text message size [26] exceeds maximum size [$maxTextSize]")
-            assertThat(err).isExactlyInstanceOf(MessageTooLargeException::class.java)
+            TestClient(app, "/ws").connectSendAndDisconnect(textToSend)
+            repeat(10) {
+                if (handlerError == null) Thread.sleep(5) // give Javalin time to trigger the error handler
+            }
+            assertThat(handlerError!!.message).isEqualTo("Text message too large: (actual) ${textToSend.length} > (configured max text message size) $maxTextSize")
+            assertThat(handlerError).isExactlyInstanceOf(MessageTooLargeException::class.java)
         }
     }
 
@@ -510,6 +520,40 @@ class TestWebSocket {
         }
     }
 
+    @Test
+    @Timeout(value = 3, unit = TimeUnit.SECONDS)
+    fun `websocket enableAutomaticPings() works`() = TestUtil.test { app, _ ->
+        app.wsBefore("/ws") {
+            it.onConnect { ctx ->
+                ctx.enableAutomaticPings(5, TimeUnit.MILLISECONDS, ByteBuffer.wrap(byteArrayOf(0, 0, 0)))
+            }
+        }
+        app.ws("/ws") { ws ->
+            ws.onMessage { ctx ->
+                when (ctx.message()) {
+                    "ENABLE_PINGS" -> ctx.enableAutomaticPings(5, TimeUnit.MILLISECONDS, ByteBuffer.wrap(byteArrayOf(1, 1, 1)))
+                    "DISABLE_PINGS" -> ctx.disableAutomaticPings()
+                }
+            }
+        }
+        val client = TestClient(app, "/ws", emptyMap(), {}, null, { frame: Framedata? ->
+            app.logger().log.add(frame!!.payloadData.get(2).toString())
+        }, null)
+        val pingsToWaitFor = (2..4).shuffled()[0] // randomization is good, wait for 2-4 pings
+        client.connectBlocking()
+        doBlocking({ /* wait for pings */ }, conditionFunction = { app.logger().log.size < pingsToWaitFor })
+        assertThat(app.logger().log).contains("0")
+        doBlocking({ client.send("DISABLE_PINGS") }, { pingFutures.size > 0 }) // check that this map clears
+        app.logger().log.clear()
+        Thread.sleep(50)
+        assertThat(app.logger().log.size).isEqualTo(0) // no pings sent during sleep after disabling pings
+        // re-enable pings, now we get the new payload [1, 1, 1]
+        client.send("ENABLE_PINGS")
+        doBlocking({ /* wait for pings */ }, conditionFunction = { app.logger().log.size < pingsToWaitFor })
+        assertThat(app.logger().log).contains("1")
+        client.disconnectBlocking()
+    }
+
     // ********************************************************************************************
     // Helpers
     // ********************************************************************************************
@@ -519,7 +563,9 @@ class TestWebSocket {
         path: String,
         headers: Map<String, String> = emptyMap(),
         val onOpen: (TestClient) -> Unit = {},
-        var onMessage: ((String) -> Unit)? = null
+        var onMessage: ((String) -> Unit)? = null,
+        var onPing: ((Framedata?) -> Unit)? = null,
+        var onPong: ((Framedata?) -> Unit)? = null
     ) : WebSocketClient(URI.create("ws://localhost:" + app.port() + path), Draft_6455(), headers, 0), AutoCloseable {
 
         override fun onOpen(serverHandshake: ServerHandshake) = onOpen(this)
@@ -530,13 +576,33 @@ class TestWebSocket {
             app.logger().log.add(message)
         }
 
-        fun connectAndDisconnect() = connectBlocking().also { closeBlocking() }
+        override fun onWebsocketPing(conn: WebSocket?, f: Framedata?) {
+            super.onWebsocketPing(conn, f)
+            onPing?.invoke(f)
+        }
+
+        override fun onWebsocketPong(conn: WebSocket?, f: Framedata?) {
+            super.onWebsocketPong(conn, f)
+            onPong?.invoke(f)
+        }
+
+        fun connectAndDisconnect() {
+            connectBlocking()
+            disconnectBlocking();
+        }
 
         fun connectSendAndDisconnect(message: String) {
             connectBlocking()
             send(message)
-            closeBlocking()
+            disconnectBlocking();
         }
+
+        fun disconnectBlocking() {
+            closeBlocking()
+            awaitResponse()
+        }
+
+        private fun awaitResponse() = Thread.sleep(1) // freeze this thread, so we're sure that other threads had a chance to finish responses
     }
 
     private fun doBlocking(slowFunction: () -> Unit, conditionFunction: () -> Boolean, timeout: Duration = Duration.ofSeconds(1)) {
@@ -547,7 +613,7 @@ class TestWebSocket {
             if (System.currentTimeMillis() > limitTime) {
                 throw TimeoutException("Wait for condition has timed out")
             }
-            Thread.sleep(2)
+            Thread.sleep(25)
         }
     }
 }

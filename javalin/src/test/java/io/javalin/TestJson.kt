@@ -7,13 +7,15 @@
 package io.javalin
 
 import com.google.gson.GsonBuilder
-import io.javalin.core.util.Header
-import io.javalin.plugin.json.JavalinJackson
-import io.javalin.plugin.json.JsonMapper
-import io.javalin.testing.NonSerializableObject
-import io.javalin.testing.SerializableObject
-import io.javalin.testing.TestUtil
-import io.javalin.testing.fasterJacksonMapper
+import io.javalin.http.Header
+import io.javalin.http.HttpStatus.BAD_REQUEST
+import io.javalin.http.HttpStatus.INTERNAL_SERVER_ERROR
+import io.javalin.http.bodyAsClass
+import io.javalin.http.bodyStreamAsClass
+import io.javalin.http.bodyValidator
+import io.javalin.json.JavalinJackson
+import io.javalin.json.JsonMapper
+import io.javalin.testing.*
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import java.io.InputStream
@@ -56,13 +58,13 @@ class TestJson {
     fun `default mapper throws when mapping unmappable object to json`() = TestUtil.test { app, http ->
         app.get("/streaming") { it.jsonStream(NonSerializableObject()) }
         http.get("/streaming").let {
-            assertThat(it.status).isEqualTo(500)
+            assertThat(it.httpCode()).isEqualTo(INTERNAL_SERVER_ERROR)
             assertThat(it.body).isEqualTo("") // error happens when writing the response, can't recover
         }
         app.get("/string") { it.json(NonSerializableObject()) }
         http.get("/string").let {
-            assertThat(it.status).isEqualTo(500)
-            assertThat(it.body).contains("Internal server error") // error happens when serializing, can recover
+            assertThat(it.httpCode()).isEqualTo(INTERNAL_SERVER_ERROR)
+            assertThat(it.body).contains(INTERNAL_SERVER_ERROR.message) // error happens when serializing, can recover
         }
     }
 
@@ -75,25 +77,25 @@ class TestJson {
     @Test
     fun `default mapper throws when mapping invalid json to class`() = TestUtil.test { app, http ->
         app.get("/") { it.bodyAsClass<NonSerializableObject>() }
-        assertThat(http.get("/").status).isEqualTo(500)
+        assertThat(http.get("/").httpCode()).isEqualTo(INTERNAL_SERVER_ERROR)
     }
 
     @Test
     fun `mapping invalid json to class can be handle by validator`() = TestUtil.test { app, http ->
         app.get("/") { it.bodyValidator<NonSerializableObject>().get() }
-        assertThat(http.get("/").status).isEqualTo(400)
+        assertThat(http.get("/").httpCode()).isEqualTo(BAD_REQUEST)
         assertThat(http.getBody("/")).isEqualTo("""{"REQUEST_BODY":[{"message":"DESERIALIZATION_FAILED","args":{},"value":""}]}""")
     }
 
     @Test
-    fun `empty mapper throws exception`() = TestUtil.test(Javalin.create { it.jsonMapper(object : JsonMapper {}) }) { app, http ->
+    fun `empty mapper throws error`() = TestUtil.test(Javalin.create { it.core.jsonMapper(object : JsonMapper {}) }) { app, http ->
         app.get("/") { it.json("Test") }
-        assertThat(http.getBody("/")).isEqualTo("")
-        assertThat(http.get("/").status).isEqualTo(500)
+        assertThat(http.getBody("/")).contains(INTERNAL_SERVER_ERROR.message)
+        assertThat(http.get("/").httpCode()).isEqualTo(INTERNAL_SERVER_ERROR)
     }
 
     @Test
-    fun `empty mapper logs proper error messages`() = TestUtil.test(Javalin.create { it.jsonMapper(object : JsonMapper {}) }) { app, http ->
+    fun `empty mapper logs proper error messages`() = TestUtil.test(Javalin.create { it.core.jsonMapper(object : JsonMapper {}) }) { app, http ->
         var log = TestUtil.captureStdOut { app.get("/write-string") { it.json("") }.also { http.getBody("/write-string") } }
         assertThat(log).contains("JsonMapper#toJsonString not implemented")
 
@@ -113,7 +115,7 @@ class TestJson {
         val sillyMapper = object : JsonMapper {
             override fun toJsonString(obj: Any): String = "toJsonString"
         }
-        TestUtil.test(Javalin.create { it.jsonMapper(sillyMapper) }) { app, http ->
+        TestUtil.test(Javalin.create { it.core.jsonMapper(sillyMapper) }) { app, http ->
             app.get("/") { it.json(SerializableObject()) }
             assertThat(http.get("/").body).isEqualTo("toJsonString")
         }
@@ -124,7 +126,7 @@ class TestJson {
         val sillyMapper = object : JsonMapper {
             override fun toJsonStream(obj: Any): InputStream = "toJsonStream".byteInputStream()
         }
-        TestUtil.test(Javalin.create { it.jsonMapper(sillyMapper) }) { app, http ->
+        TestUtil.test(Javalin.create { it.core.jsonMapper(sillyMapper) }) { app, http ->
             app.get("/") { it.jsonStream(SerializableObject()) }
             assertThat(http.get("/").body).isEqualTo("toJsonStream")
         }
@@ -133,9 +135,9 @@ class TestJson {
     @Test
     fun `user can configure custom fromJsonString`() {
         val sillyMapper = object : JsonMapper {
-            override fun <T : Any?> fromJsonString(json: String, targetClass: Class<T>): T = "fromJsonString" as T
+            override fun <T : Any> fromJsonString(json: String, targetClass: Class<T>): T = "fromJsonString" as T
         }
-        TestUtil.test(Javalin.create { it.jsonMapper(sillyMapper) }) { app, http ->
+        TestUtil.test(Javalin.create { it.core.jsonMapper(sillyMapper) }) { app, http ->
             app.get("/") { it.result(it.bodyAsClass<String>()) }
             assertThat(http.get("/").body).isEqualTo("fromJsonString")
         }
@@ -144,9 +146,9 @@ class TestJson {
     @Test
     fun `user can configure custom fromJsonStream`() {
         val sillyMapper = object : JsonMapper {
-            override fun <T : Any?> fromJsonStream(json: InputStream, targetClass: Class<T>): T = "fromJsonStream" as T
+            override fun <T : Any> fromJsonStream(json: InputStream, targetClass: Class<T>): T = "fromJsonStream" as T
         }
-        TestUtil.test(Javalin.create { it.jsonMapper(sillyMapper) }) { app, http ->
+        TestUtil.test(Javalin.create { it.core.jsonMapper(sillyMapper) }) { app, http ->
             app.get("/") { it.result(it.bodyStreamAsClass<String>()) }
             assertThat(http.get("/").body).isEqualTo("fromJsonStream")
         }
@@ -156,10 +158,10 @@ class TestJson {
     fun `user can use GSON`() {
         val gson = GsonBuilder().create()
         val gsonMapper = object : JsonMapper {
-            override fun <T> fromJsonString(json: String, targetClass: Class<T>): T = gson.fromJson(json, targetClass)
+            override fun <T : Any> fromJsonString(json: String, targetClass: Class<T>): T = gson.fromJson(json, targetClass)
             override fun toJsonString(obj: Any) = gson.toJson(obj)
         }
-        TestUtil.test(Javalin.create { it.jsonMapper(gsonMapper) }) { app, http ->
+        TestUtil.test(Javalin.create { it.core.jsonMapper(gsonMapper) }) { app, http ->
             app.get("/") { it.json(SerializableObject()) }
             assertThat(http.getBody("/")).isEqualTo(gson.toJson(SerializableObject()))
             app.post("/") { ctx ->

@@ -21,8 +21,8 @@ fun main() {
     val statsClients = ConcurrentLinkedQueue<SseClient>()
 
     Javalin.create {
-        it.addStaticFiles("/public", Location.CLASSPATH)
-        it.server { Server(tp) }
+        it.staticFiles.add("/public", Location.CLASSPATH)
+        it.jetty.server { Server(tp) }
     }.apply {
         get("/") { it.redirect("/sse/sse-example.html") }
         sse("/sse-counter") { client ->

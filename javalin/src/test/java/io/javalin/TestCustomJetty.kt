@@ -7,10 +7,22 @@
 
 package io.javalin
 
-import io.javalin.core.LoomUtil
-import io.javalin.http.HttpCode
+import io.javalin.http.HttpStatus
+import io.javalin.http.HttpStatus.IM_A_TEAPOT
+import io.javalin.util.LoomUtil
+import io.javalin.http.HttpStatus.NOT_FOUND
 import io.javalin.testing.TestServlet
 import io.javalin.testing.TestUtil
+import io.javalin.testing.httpCode
+import jakarta.servlet.DispatcherType
+import jakarta.servlet.Filter
+import jakarta.servlet.FilterChain
+import jakarta.servlet.FilterConfig
+import jakarta.servlet.ServletRequest
+import jakarta.servlet.ServletResponse
+import jakarta.servlet.http.HttpServlet
+import jakarta.servlet.http.HttpServletRequest
+import jakarta.servlet.http.HttpServletResponse
 import kong.unirest.Unirest
 import org.assertj.core.api.Assertions.assertThat
 import org.eclipse.jetty.server.ForwardedRequestCustomizer
@@ -35,15 +47,6 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.util.*
 import java.util.concurrent.atomic.AtomicLong
-import javax.servlet.DispatcherType
-import javax.servlet.Filter
-import javax.servlet.FilterChain
-import javax.servlet.FilterConfig
-import javax.servlet.ServletRequest
-import javax.servlet.ServletResponse
-import javax.servlet.http.HttpServlet
-import javax.servlet.http.HttpServletRequest
-import javax.servlet.http.HttpServletResponse
 
 class TestCustomJetty {
 
@@ -70,11 +73,11 @@ class TestCustomJetty {
     fun `embedded server can have custom jetty Handler`() = TestUtil.runLogLess {
         val statisticsHandler = StatisticsHandler()
         val newServer = Server().apply { handler = statisticsHandler }
-        val app = Javalin.create { it.server { newServer } }.get("/") { it.result("Hello World") }.start(0)
+        val app = Javalin.create { it.jetty.server { newServer } }.get("/") { it.result("Hello World") }.start(0)
         val requests = 5
         for (i in 0 until requests) {
             assertThat(Unirest.get("http://localhost:" + app.port() + "/").asString().body).isEqualTo("Hello World")
-            assertThat(Unirest.get("http://localhost:" + app.port() + "/not-there").asString().status).isEqualTo(404)
+            assertThat(Unirest.get("http://localhost:" + app.port() + "/not-there").asString().httpCode()).isEqualTo(NOT_FOUND)
         }
         app.stop()
         assertThat(statisticsHandler.dispatched).isEqualTo(requests * 2)
@@ -88,11 +91,11 @@ class TestCustomJetty {
         val requestLogHandler = RequestLogHandler().apply { requestLog = RequestLog { _, _ -> logCount.incrementAndGet() } }
         val handlerChain = StatisticsHandler().apply { handler = requestLogHandler }
         val newServer = Server().apply { handler = handlerChain }
-        val app = Javalin.create { it.server { newServer } }.get("/") { it.result("Hello World") }.start(0)
+        val app = Javalin.create { it.jetty.server { newServer } }.get("/") { it.result("Hello World") }.start(0)
         val requests = 10
         for (i in 0 until requests) {
             assertThat(Unirest.get("http://localhost:" + app.port() + "/").asString().body).isEqualTo("Hello World")
-            assertThat(Unirest.get("http://localhost:" + app.port() + "/not-there").asString().status).isEqualTo(404)
+            assertThat(Unirest.get("http://localhost:" + app.port() + "/not-there").asString().httpCode()).isEqualTo(NOT_FOUND)
         }
         app.stop()
         assertThat(handlerChain.dispatched).`as`("dispatched").isEqualTo(requests * 2)
@@ -106,11 +109,11 @@ class TestCustomJetty {
         val handlerCollection = HandlerCollection()
         val handlerChain = StatisticsHandler().apply { handler = handlerCollection }
         val newServer = Server().apply { handler = handlerChain }
-        val app = Javalin.create { it.server { newServer } }.get("/") { it.result("Hello World") }.start(0)
+        val app = Javalin.create { it.jetty.server { newServer } }.get("/") { it.result("Hello World") }.start(0)
         val requests = 10
         for (i in 0 until requests) {
             assertThat(Unirest.get("http://localhost:" + app.port() + "/").asString().body).isEqualTo("Hello World")
-            assertThat(Unirest.get("http://localhost:" + app.port() + "/not-there").asString().status).isEqualTo(404)
+            assertThat(Unirest.get("http://localhost:" + app.port() + "/not-there").asString().httpCode()).isEqualTo(NOT_FOUND)
         }
         app.stop()
         assertThat(handlerChain.dispatched).isEqualTo(requests * 2)
@@ -130,8 +133,8 @@ class TestCustomJetty {
             }
         }
         val javalin = Javalin.create {
-            it.sessionHandler { fileSessionHandler }
-            it.server { newServer }
+            it.jetty.sessionHandler { fileSessionHandler }
+            it.jetty.server { newServer }
         }.start(0)
         val httpHandler = (newServer.handlers[0] as ServletContextHandler)
         assertThat(httpHandler.sessionHandler).isEqualTo(fileSessionHandler)
@@ -142,22 +145,26 @@ class TestCustomJetty {
     fun `custom ContextHandlerCollection works`() {
         val newServer = Server()
         val handler = ContextHandlerCollection().apply {
-            setContextClass(ServletContextHandler::class.java)
-            val ctx = addContext("/foo", ".") as ServletContextHandler
+            val ctx = ServletContextHandler().apply {
+                contextPath = "/foo"
+                resourceBase = "."
+            }
+
             ctx.addServlet(ServletHolder(object : HttpServlet() {
                 override fun doGet(req: HttpServletRequest?, resp: HttpServletResponse?) {
                     resp?.writer?.write("yo dude")
                 }
             }), "/foo")
 
+            addHandler(ctx)
         }
         newServer.handler = handler
 
-        val javalin = Javalin.create { it.server { newServer } }
+        val javalin = Javalin.create { it.jetty.server { newServer } }
         TestUtil.test(javalin) { app, http ->
             app.get("/bar") { it.result("Hello") }
             assertThat(http.getBody("/foo/foo")).isEqualTo("yo dude")
-            assertThat(http.get("/foo/baz").status).isEqualTo(404)
+            assertThat(http.get("/foo/baz").httpCode()).isEqualTo(NOT_FOUND)
             assertThat(http.getBody("/bar")).isEqualTo("Hello")
         }
     }
@@ -173,8 +180,8 @@ class TestCustomJetty {
             }
         }
         val javalin = Javalin.create {
-            it.server { newServer }
-            it.contextPath = "/api"
+            it.jetty.server { newServer }
+            it.routing.contextPath = "/api"
         }
         TestUtil.test(javalin) { app, http ->
             app.get("/") { it.result("Hello Javalin World!") }
@@ -195,7 +202,7 @@ class TestCustomJetty {
     fun `custom connector works`() {
         val port = (2000..9999).random()
         val app = Javalin.create { config ->
-            config.server {
+            config.jetty.server {
                 Server().apply {
                     val httpConfiguration = HttpConfiguration()
                     httpConfiguration.addCustomizer(ForwardedRequestCustomizer())
@@ -214,18 +221,18 @@ class TestCustomJetty {
     @Test
     fun `can add filter to stop request before javalin`() {
         val filterJavalin = Javalin.create {
-            it.configureServletContextHandler { handler ->
+            it.jetty.contextHandlerConfig { handler ->
                 handler.addFilter(FilterHolder(object : Filter {
                     override fun init(config: FilterConfig?) {}
                     override fun destroy() {}
                     override fun doFilter(request: ServletRequest, response: ServletResponse, chain: FilterChain) {
-                        (response as HttpServletResponse).status = HttpCode.IM_A_TEAPOT.status
+                        (response as HttpServletResponse).status = IM_A_TEAPOT.code
                     }
                 }), "/*", EnumSet.allOf(DispatcherType::class.java))
             }
         }
         TestUtil.test(filterJavalin) { _, http ->
-            assertThat(http.get("/test").status).isEqualTo(HttpCode.IM_A_TEAPOT.status)
+            assertThat(http.get("/test").httpCode()).isEqualTo(IM_A_TEAPOT)
             assertThat(http.get("/test").body).isNotEqualTo("Test")
         }
     }

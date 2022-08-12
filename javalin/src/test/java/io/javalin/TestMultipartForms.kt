@@ -7,9 +7,11 @@
 package io.javalin
 
 import io.javalin.http.ContentType
+import io.javalin.http.formParamAsClass
 import io.javalin.testing.TestUtil
 import io.javalin.testing.UploadInfo
 import io.javalin.testing.fasterJacksonMapper
+import jakarta.servlet.MultipartConfigElement
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -18,7 +20,6 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import java.io.File
-import javax.servlet.MultipartConfigElement
 
 class TestMultipartForms {
 
@@ -32,7 +33,9 @@ class TestMultipartForms {
 
     @Test
     fun `text is uploaded correctly`() = TestUtil.test { app, http ->
-        app.post("/test-upload") { it.result(it.uploadedFile("upload")!!.content.readBytes().toString(Charsets.UTF_8)) }
+        app.post("/test-upload") {
+            it.result(it.uploadedFile("upload")!!.contentAndClose { it.readBytes().toString(Charsets.UTF_8) })
+        }
         val response = http.post("/test-upload")
             .field("upload", File("src/test/resources/upload-test/text.txt"))
             .asString()
@@ -47,7 +50,7 @@ class TestMultipartForms {
     fun `mp3s are uploaded correctly`() = TestUtil.test { app, http ->
         app.post("/test-upload") { ctx ->
             val uf = ctx.uploadedFile("upload")!!
-            ctx.json(UploadInfo(uf.filename, uf.size, uf.contentType, uf.extension))
+            ctx.json(UploadInfo(uf.filename(), uf.size(), uf.contentType(), uf.extension()))
         }
         val uploadFile = File("src/test/resources/upload-test/sound.mp3")
         val response = http.post("/test-upload")
@@ -65,7 +68,7 @@ class TestMultipartForms {
     fun `pngs are uploaded correctly`() = TestUtil.test { app, http ->
         app.post("/test-upload") { ctx ->
             val uf = ctx.uploadedFile("upload")
-            ctx.json(UploadInfo(uf!!.filename, uf.size, uf.contentType, uf.extension))
+            ctx.json(UploadInfo(uf!!.filename(), uf.size(), uf.contentType(), uf.extension()))
         }
         val uploadFile = File("src/test/resources/upload-test/image.png")
         val response = http.post("/test-upload")
@@ -102,7 +105,7 @@ class TestMultipartForms {
     @Test
     fun `getting all files is handled correctly`() = TestUtil.test { app, http ->
         app.post("/test-upload") { ctx ->
-            ctx.result(ctx.uploadedFiles().joinToString(", ") { it.filename })
+            ctx.result(ctx.uploadedFiles().joinToString(", ") { it.filename() })
         }
         val response = http.post("/test-upload")
             .field("upload", File("src/test/resources/upload-test/image.png"))
@@ -120,7 +123,7 @@ class TestMultipartForms {
         }
 
         app.post("/test-upload") { ctx ->
-            ctx.result(ctx.uploadedFiles().joinToString(", ") { it.filename })
+            ctx.result(ctx.uploadedFiles().joinToString(", ") { it.filename() })
         }
 
         app.exception(IllegalStateException::class.java) { e, ctx ->
@@ -128,9 +131,9 @@ class TestMultipartForms {
         }
 
         val response = http.post("/test-upload")
-                .field("upload", File("src/test/resources/upload-test/image.png"))
-                .field("text-field", "text")
-                .asString()
+            .field("upload", File("src/test/resources/upload-test/image.png"))
+            .field("text-field", "text")
+            .asString()
         assertThat(response.body).isEqualTo("java.lang.IllegalStateException Request exceeds maxRequestSize (10)")
     }
 
@@ -148,7 +151,7 @@ class TestMultipartForms {
 
     @Test
     fun `mixing files and text fields works`() = TestUtil.test { app, http ->
-        app.post("/test-upload") { it.result(it.formParam("field") + " and " + it.uploadedFile("upload")!!.filename) }
+        app.post("/test-upload") { it.result(it.formParam("field") + " and " + it.uploadedFile("upload")!!.filename()) }
         val response = http.post("/test-upload")
             .field("upload", File("src/test/resources/upload-test/image.png"))
             .field("field", "text-value")
@@ -169,7 +172,7 @@ class TestMultipartForms {
 
     @Test
     fun `unicode text-fields work`() = TestUtil.test { app, http ->
-        app.post("/test-upload") { it.result(it.formParam("field") + " and " + it.uploadedFile("upload")!!.filename) }
+        app.post("/test-upload") { it.result(it.formParam("field") + " and " + it.uploadedFile("upload")!!.filename()) }
         val response = http.post("/test-upload")
             .field("upload", File("src/test/resources/upload-test/text.txt"))
             .field("field", "♚♛♜♜♝♝♞♞♟♟♟♟♟♟♟♟")
@@ -186,9 +189,9 @@ class TestMultipartForms {
             val baz = ctx.formParamAsClass<String>("baz").getOrDefault("default")
             ctx.result(
                 "foos match: " + (foos == foosExtractedManually) + "\n"
-                        + "foo: " + foos.joinToString(", ") + "\n"
-                        + "bar: " + bar + "\n"
-                        + "baz: " + baz
+                    + "foo: " + foos.joinToString(", ") + "\n"
+                    + "bar: " + bar + "\n"
+                    + "baz: " + baz
             )
         }
         val responseAsString = okHttp.newCall(
@@ -202,9 +205,9 @@ class TestMultipartForms {
             ).build()
         ).execute().body!!.string()
         val expectedContent = ("foos match: true" + "\n"
-                + "foo: foo-1, foo-2" + "\n"
-                + "bar: bar-1" + "\n"
-                + "baz: default")
+            + "foo: foo-1, foo-2" + "\n"
+            + "bar: bar-1" + "\n"
+            + "baz: default")
         assertThat(responseAsString).isEqualTo(expectedContent)
     }
 
@@ -213,7 +216,7 @@ class TestMultipartForms {
         val prefix = "PREFIX: "
         val tempFile = File("src/test/resources/upload-test/text.txt")
         app.post("/test-multipart-file-and-text") { ctx ->
-            val fileContent = ctx.uploadedFile("upload")!!.content.readBytes().toString(Charsets.UTF_8)
+            val fileContent = ctx.uploadedFile("upload")!!.contentAndClose { it.readBytes().toString(Charsets.UTF_8) }
             ctx.result(ctx.formParam("prefix")!! + fileContent)
         }
         val responseAsString = okHttp.newCall(

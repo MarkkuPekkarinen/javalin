@@ -9,30 +9,30 @@ package io.javalin;
 
 import io.javalin.apibuilder.ApiBuilder;
 import io.javalin.apibuilder.EndpointGroup;
-import io.javalin.core.JavalinConfig;
-import io.javalin.core.event.EventListener;
-import io.javalin.core.event.EventManager;
-import io.javalin.core.event.HandlerMetaInfo;
-import io.javalin.core.event.JavalinEvent;
-import io.javalin.core.event.WsHandlerMetaInfo;
-import io.javalin.core.security.AccessManager;
-import io.javalin.core.security.RouteRole;
-import io.javalin.core.util.JavalinBindException;
-import io.javalin.core.util.JavalinException;
-import io.javalin.core.util.JavalinLogger;
-import io.javalin.core.util.Util;
-import io.javalin.core.validation.JavalinValidation;
+import io.javalin.config.JavalinConfig;
+import io.javalin.event.EventListener;
+import io.javalin.event.EventManager;
+import io.javalin.event.HandlerMetaInfo;
+import io.javalin.event.JavalinEvent;
+import io.javalin.event.WsHandlerMetaInfo;
 import io.javalin.http.Context;
-import io.javalin.http.ErrorMapperKt;
 import io.javalin.http.ExceptionHandler;
 import io.javalin.http.Handler;
 import io.javalin.http.HandlerType;
+import io.javalin.http.HttpStatus;
 import io.javalin.http.JavalinServlet;
 import io.javalin.http.sse.SseClient;
 import io.javalin.http.sse.SseHandler;
 import io.javalin.jetty.JavalinJettyServlet;
 import io.javalin.jetty.JettyServer;
 import io.javalin.jetty.JettyUtil;
+import io.javalin.routing.HandlerEntry;
+import io.javalin.security.AccessManager;
+import io.javalin.security.RouteRole;
+import io.javalin.util.JavalinBindException;
+import io.javalin.util.JavalinException;
+import io.javalin.util.JavalinLogger;
+import io.javalin.util.Util;
 import io.javalin.websocket.WsConfig;
 import io.javalin.websocket.WsExceptionHandler;
 import io.javalin.websocket.WsHandlerType;
@@ -51,17 +51,17 @@ public class Javalin implements AutoCloseable {
      * Do not use this field unless you know what you're doing.
      * Application config should be declared in {@link Javalin#create(Consumer)}
      */
-    public JavalinConfig _conf = new JavalinConfig();
+    public JavalinConfig cfg = new JavalinConfig();
 
     protected JettyServer jettyServer; // null in standalone-mode
     protected JavalinJettyServlet javalinJettyServlet; // null in standalone-mode
-    protected JavalinServlet javalinServlet = new JavalinServlet(_conf);
+    protected JavalinServlet javalinServlet = new JavalinServlet(cfg);
 
     protected EventManager eventManager = new EventManager();
 
     protected Javalin() {
-        this.jettyServer = new JettyServer(_conf);
-        this.javalinJettyServlet = new JavalinJettyServlet(_conf, javalinServlet);
+        this.jettyServer = new JettyServer(cfg);
+        this.javalinJettyServlet = new JavalinJettyServlet(cfg, javalinServlet);
     }
 
     public Javalin(JettyServer jettyServer, JavalinJettyServlet jettyServlet) {
@@ -89,8 +89,7 @@ public class Javalin implements AutoCloseable {
      */
     public static Javalin create(Consumer<JavalinConfig> config) {
         Javalin app = new Javalin();
-        JavalinValidation.addValidationExceptionMapper(app);
-        JavalinConfig.applyUserConfig(app, app._conf, config); // mutates app.config and app (adds http-handlers)
+        JavalinConfig.applyUserConfig(app, app.cfg, config); // mutates app.config and app (adds http-handlers)
         JettyUtil.maybeLogIfServerNotStarted(app.jettyServer);
         return app;
     }
@@ -98,7 +97,7 @@ public class Javalin implements AutoCloseable {
     // Create a standalone (non-jetty dependent) Javalin with the supplied config
     public static Javalin createStandalone(Consumer<JavalinConfig> config) {
         Javalin app = new Javalin(null, null);
-        JavalinConfig.applyUserConfig(app, app._conf, config); // mutates app.config and app (adds http-handlers)
+        JavalinConfig.applyUserConfig(app, app.cfg, config); // mutates app.config and app (adds http-handlers)
         return app;
     }
 
@@ -157,8 +156,6 @@ public class Javalin implements AutoCloseable {
      * @see Javalin#create()
      */
     public Javalin start() {
-        Util.logJavalinBanner(this._conf.showJavalinBanner);
-        JettyUtil.disableJettyLogger();
         long startupTimer = System.currentTimeMillis();
         if (jettyServer.started) {
             String message = "Server already started. If you are trying to call start() on an instance " +
@@ -170,8 +167,8 @@ public class Javalin implements AutoCloseable {
         eventManager.fireEvent(JavalinEvent.SERVER_STARTING);
         try {
             JavalinLogger.startup("Starting Javalin ...");
-            Util.logJavalinVersion();
             jettyServer.start(javalinJettyServlet);
+            Util.logJavalinVersion();
             JavalinLogger.startup("Javalin started in " + (System.currentTimeMillis() - startupTimer) + "ms \\o/");
             eventManager.fireEvent(JavalinEvent.SERVER_STARTED);
         } catch (Exception e) {
@@ -252,7 +249,7 @@ public class Javalin implements AutoCloseable {
      * The method must be called before {@link Javalin#start()}.
      */
     public Javalin attribute(String key, Object value) {
-        _conf.inner.appAttributes.put(key, value);
+        cfg.pvt.appAttributes.put(key, value);
         return this;
     }
 
@@ -263,7 +260,7 @@ public class Javalin implements AutoCloseable {
      * Ex: ctx.appAttribute(MyExt.class).myMethod()
      */
     public <T> T attribute(String key) {
-        return (T) _conf.inner.appAttributes.get(key);
+        return (T) cfg.pvt.appAttributes.get(key);
     }
 
     /**
@@ -303,9 +300,18 @@ public class Javalin implements AutoCloseable {
      *
      * @see <a href="https://javalin.io/documentation#error-mapping">Error mapping in docs</a>
      */
-    public Javalin error(int statusCode, @NotNull Handler handler) {
-        javalinServlet.getErrorMapper().getErrorHandlerMap().put(statusCode, handler);
-        return this;
+    public Javalin error(HttpStatus status, @NotNull Handler handler) {
+        return error(status.getCode(), "*", handler);
+    }
+
+    /**
+     * Adds an error mapper to the instance.
+     * Useful for turning error-codes (404, 500) into standardized messages/pages
+     *
+     * @see <a href="https://javalin.io/documentation#error-mapping">Error mapping in docs</a>
+     */
+    public Javalin error(int status, @NotNull Handler handler) {
+        return error(status, "*", handler);
     }
 
     /**
@@ -314,9 +320,21 @@ public class Javalin implements AutoCloseable {
      *
      * @see <a href="https://javalin.io/documentation#error-mapping">Error mapping in docs</a>
      */
-    public Javalin error(int statusCode, @NotNull String contentType, @NotNull Handler handler) {
-        return error(statusCode, ErrorMapperKt.contentTypeWrap(contentType, handler));
+    public Javalin error(HttpStatus status, @NotNull String contentType, @NotNull Handler handler) {
+        return error(status.getCode(), contentType, handler);
     }
+
+    /**
+     * Adds an error mapper for the specified content-type to the instance.
+     * Useful for turning error-codes (404, 500) into standardized messages/pages
+     *
+     * @see <a href="https://javalin.io/documentation#error-mapping">Error mapping in docs</a>
+     */
+    public Javalin error(int status, @NotNull String contentType, @NotNull Handler handler) {
+        javalinServlet.getErrorMapper().addHandler(status, contentType, handler);
+        return this;
+    }
+
 
     /**
      * Adds a request handler for the specified handlerType and path to the instance.
@@ -328,8 +346,8 @@ public class Javalin implements AutoCloseable {
      */
     public Javalin addHandler(@NotNull HandlerType handlerType, @NotNull String path, @NotNull Handler handler, @NotNull RouteRole... roles) {
         Set<RouteRole> roleSet = new HashSet<>(Arrays.asList(roles));
-        javalinServlet.addHandler(handlerType, path, handler, roleSet);
-        eventManager.fireHandlerAddedEvent(new HandlerMetaInfo(handlerType, Util.prefixContextPath(javalinServlet.getConfig().contextPath, path), handler, roleSet));
+        javalinServlet.getMatcher().add(new HandlerEntry(handlerType, path, cfg.routing, roleSet, handler));
+        eventManager.fireHandlerAddedEvent(new HandlerMetaInfo(handlerType, Util.prefixContextPath(cfg.routing.contextPath, path), handler, roleSet));
         return this;
     }
 
@@ -574,7 +592,7 @@ public class Javalin implements AutoCloseable {
     private Javalin addWsHandler(@NotNull WsHandlerType handlerType, @NotNull String path, @NotNull Consumer<WsConfig> wsConfig, @NotNull RouteRole... roles) {
         Set<RouteRole> roleSet = new HashSet<>(Arrays.asList(roles));
         javalinJettyServlet.addHandler(handlerType, path, wsConfig, roleSet);
-        eventManager.fireWsHandlerAddedEvent(new WsHandlerMetaInfo(handlerType, Util.prefixContextPath(javalinServlet.getConfig().contextPath, path), wsConfig, roleSet));
+        eventManager.fireWsHandlerAddedEvent(new WsHandlerMetaInfo(handlerType, Util.prefixContextPath(cfg.routing.contextPath, path), wsConfig, roleSet));
         return this;
     }
 

@@ -7,10 +7,15 @@
 
 package io.javalin
 
-import io.javalin.core.util.Header
 import io.javalin.http.ContentType
+import io.javalin.http.Header
+import io.javalin.http.HttpStatus
+import io.javalin.http.HttpStatus.IM_A_TEAPOT
+import io.javalin.http.HttpStatus.MOVED_PERMANENTLY
+import io.javalin.http.HttpStatus.SEE_OTHER
 import io.javalin.http.util.SeekableWriter
 import io.javalin.testing.TestUtil
+import io.javalin.testing.httpCode
 import kong.unirest.HttpMethod
 import kong.unirest.Unirest
 import org.assertj.core.api.Assertions.assertThat
@@ -34,10 +39,10 @@ class TestResponse {
             I often try to fill if up with wine. - Tim Minchin
         """
         app.get("/hello") { ctx ->
-            ctx.status(418).result(myBody).header("X-HEADER-1", "my-header-1").header("X-HEADER-2", "my-header-2")
+            ctx.status(IM_A_TEAPOT).result(myBody).header("X-HEADER-1", "my-header-1").header("X-HEADER-2", "my-header-2")
         }
         val response = http.call(HttpMethod.GET, "/hello")
-        assertThat(response.status).isEqualTo(418)
+        assertThat(response.httpCode()).isEqualTo(IM_A_TEAPOT)
         assertThat(response.body).isEqualTo(myBody)
         assertThat(response.headers.getFirst("X-HEADER-1")).isEqualTo("my-header-1")
         assertThat(response.headers.getFirst("X-HEADER-2")).isEqualTo("my-header-2")
@@ -84,9 +89,9 @@ class TestResponse {
     @Test
     fun `gh-1409 entrypoint to analyze compression strategy lifecycle`() {
         val javalin = Javalin.create { javalinConfig ->
-            javalinConfig.enableCorsForAllOrigins()
-            javalinConfig.showJavalinBanner = false
-            javalinConfig.maxRequestSize = 5_000_000
+            javalinConfig.plugins.enableCors { it.reflectClientOrigin = true }
+            javalinConfig.core.showJavalinBanner = false
+            javalinConfig.http.maxRequestSize = 5_000_000
         }.start(9005)
 
         val longString = Array(Short.MAX_VALUE.toInt()) { "0" }.joinToString()
@@ -95,7 +100,9 @@ class TestResponse {
             ctx.result(longString)
         }
 
-        while (true) {} // should be requested by external tool
+        while (true) {
+            // should be requested by external tool
+        }
     }
 
     @Test
@@ -115,27 +122,31 @@ class TestResponse {
 
     @Test
     fun `redirect in normal handler works`() = TestUtil.test { app, http ->
+        http.disableUnirestRedirects()
         app.get("/hello") { it.redirect("/hello-2") }
-        app.get("/hello-2") { it.result("Redirected") }
-        assertThat(http.getBody("/hello")).isEqualTo("Redirected")
+        app.get("/hello-2") { it.result("Woop!") }
+        val response = http.get("/hello")
+        assertThat(response.body).isEqualTo("Redirected")
+        assertThat(response.status).isEqualTo(HttpStatus.FOUND.code)
+        http.enableUnirestRedirects()
     }
 
     @Test
     fun `redirect with status works`() = TestUtil.test { app, http ->
-        app.get("/hello") { it.redirect("/hello-2", 301) }
-        app.get("/hello-2") { it.result("Redirected") }
         http.disableUnirestRedirects()
-        assertThat(http.call(HttpMethod.GET, "/hello").status).isEqualTo(301)
-        http.enableUnirestRedirects()
+        app.get("/hello") { it.redirect("/hello-2", MOVED_PERMANENTLY) }
+        app.get("/hello-2") { it.result("Redirected") }
+        assertThat(http.call(HttpMethod.GET, "/hello").httpCode()).isEqualTo(MOVED_PERMANENTLY)
         assertThat(http.call(HttpMethod.GET, "/hello").body).isEqualTo("Redirected")
+        http.enableUnirestRedirects()
     }
 
     @Test
     fun `redirect to absolute path works`() = TestUtil.test { app, http ->
-        app.get("/hello-abs") { it.redirect("${http.origin}/hello-abs-2", 303) }
+        app.get("/hello-abs") { it.redirect("${http.origin}/hello-abs-2", SEE_OTHER) }
         app.get("/hello-abs-2") { it.result("Redirected") }
         http.disableUnirestRedirects()
-        assertThat(http.call(HttpMethod.GET, "/hello-abs").status).isEqualTo(303)
+        assertThat(http.call(HttpMethod.GET, "/hello-abs").httpCode()).isEqualTo(SEE_OTHER)
         http.enableUnirestRedirects()
         assertThat(http.call(HttpMethod.GET, "/hello-abs").body).isEqualTo("Redirected")
     }
@@ -159,7 +170,7 @@ class TestResponse {
 
     @Test
     fun `seekable - range works`() = TestUtil.test { app, http ->
-        app.get("/seekable") { it.seekableStream(getSeekableInput(), ContentType.PLAIN) }
+        app.get("/seekable") { it.writeSeekableStream(getSeekableInput(), ContentType.PLAIN) }
         val response = Unirest.get(http.origin + "/seekable")
             .headers(mapOf(Header.RANGE to "bytes=${SeekableWriter.chunkSize}-${SeekableWriter.chunkSize * 2 - 1}"))
             .asString().body
@@ -168,14 +179,14 @@ class TestResponse {
 
     @Test
     fun `seekable - no-range works`() = TestUtil.test { app, http ->
-        app.get("/seekable-2") { it.seekableStream(getSeekableInput(), ContentType.PLAIN) }
+        app.get("/seekable-2") { it.writeSeekableStream(getSeekableInput(), ContentType.PLAIN) }
         val response = Unirest.get(http.origin + "/seekable-2").asString().body
         assertThat(response.length).isEqualTo(getSeekableInput().available())
     }
 
     @Test
     fun `seekable - overreaching range works`() = TestUtil.test { app, http ->
-        app.get("/seekable-3") { it.seekableStream(getSeekableInput(), ContentType.PLAIN) }
+        app.get("/seekable-3") { it.writeSeekableStream(getSeekableInput(), ContentType.PLAIN) }
         val response = Unirest.get(http.origin + "/seekable-3")
             .headers(mapOf(Header.RANGE to "bytes=0-${SeekableWriter.chunkSize * 4}"))
             .asBytes()
@@ -184,7 +195,7 @@ class TestResponse {
 
     @Test
     fun `seekable - file smaller than chunksize works`() = TestUtil.test { app, http ->
-        app.get("/seekable-4") { it.seekableStream(getSeekableInput(repeats = 50), ContentType.PLAIN) }
+        app.get("/seekable-4") { it.writeSeekableStream(getSeekableInput(repeats = 50), ContentType.PLAIN) }
         val response = Unirest.get(http.origin + "/seekable-4")
             .headers(mapOf(Header.RANGE to "bytes=0-${SeekableWriter.chunkSize}"))
             .asString().body
@@ -192,13 +203,25 @@ class TestResponse {
     }
 
     @Test
+    fun `seekable - can listen to future`() = TestUtil.test { app, http ->
+        var response: String? = null
+        app.get("/seekable-5") {
+            it.writeSeekableStream(getSeekableInput(), ContentType.PLAIN).thenAccept {
+                assertThat(response!!.length).isEqualTo(getSeekableInput().available())
+            }
+            assertThat(response).isNull()
+        }
+        response = Unirest.get(http.origin + "/seekable-5").asString().body
+    }
+
+    @Test
     fun `seekable - large file works`() = TestUtil.test { app, http ->
         val prefixSize = 1L shl 31 //2GB
         val contentSize = 100L
-        app.get("/seekable-5") { it.seekableStream(LargeSeekableInput(prefixSize, contentSize), ContentType.PLAIN, prefixSize + contentSize) }
+        app.get("/seekable-5") { it.writeSeekableStream(LargeSeekableInput(prefixSize, contentSize), ContentType.PLAIN, prefixSize + contentSize) }
         val response = Unirest.get(http.origin + "/seekable-5")
-                .headers(mapOf(Header.RANGE to "bytes=${prefixSize}-${prefixSize + contentSize - 1}"))
-                .asString()
+            .headers(mapOf(Header.RANGE to "bytes=${prefixSize}-${prefixSize + contentSize - 1}"))
+            .asString()
 
         assertThat(response.headers[Header.CONTENT_RANGE]?.get(0)).isEqualTo("bytes ${prefixSize}-${prefixSize + contentSize - 1}/${prefixSize + contentSize}")
         val responseBody = response.body

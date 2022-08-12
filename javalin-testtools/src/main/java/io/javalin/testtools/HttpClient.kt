@@ -2,7 +2,7 @@ package io.javalin.testtools
 
 import io.javalin.Javalin
 import io.javalin.http.ContentType
-import io.javalin.plugin.json.jsonMapper
+import io.javalin.json.jsonMapper
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -11,9 +11,8 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.util.function.Consumer
 
-class HttpClient(val app: Javalin) {
+class HttpClient(val app: Javalin, val okHttp: OkHttpClient) {
 
-    var okHttp = OkHttpClient()
     var origin: String = "http://localhost:${app.port()}"
 
     fun request(request: Request) = okHttp.newCall(request).execute()

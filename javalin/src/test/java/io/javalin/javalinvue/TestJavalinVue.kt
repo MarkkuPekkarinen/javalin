@@ -8,10 +8,12 @@ package io.javalin.javalinvue
 
 import io.javalin.Javalin
 import io.javalin.http.Context
-import io.javalin.plugin.rendering.vue.JavalinVue
-import io.javalin.plugin.rendering.vue.VueComponent
-import io.javalin.plugin.rendering.vue.VueRenderer
+import io.javalin.http.HttpStatus.NOT_FOUND
+import io.javalin.http.staticfiles.Location
 import io.javalin.testing.TestUtil
+import io.javalin.vue.JavalinVue
+import io.javalin.vue.VueComponent
+import io.javalin.vue.VueRenderer
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -28,10 +30,11 @@ class TestJavalinVue {
     companion object {
         fun before() {
             with(JavalinVue) {
-                vueVersion { it.vue2() }
+                enableCspAndNonces = false // reset
+                vueAppName = null // reset
                 isDev = null // reset
                 stateFunction = { mapOf<String, String>() } // reset
-                rootDirectory { it.externalPath("src/test/resources/vue") } // src/main ->
+                rootDirectory("src/test/resources/vue", Location.EXTERNAL) // src/main ->
                 optimizeDependencies = false
             }
         }
@@ -135,7 +138,7 @@ class TestJavalinVue {
 
     @Test
     fun `vue3 component without state`() = TestUtil.test { app, http ->
-        JavalinVue.vueVersion { it.vue3("app") }
+        JavalinVue.vueAppName = "app"
         val encodedEmptyState = """{"pathParams":{},"state":{}}""".uriEncodeForJavascript()
         app.get("/no-state", VueComponent("test-component-3"))
         val res = http.getBody("/no-state")
@@ -147,7 +150,7 @@ class TestJavalinVue {
 
     @Test
     fun `vue3 component with state`() = TestUtil.test { app, http ->
-        JavalinVue.vueVersion { it.vue3("app") }
+        JavalinVue.vueAppName = "app"
         val encodedState =
             """{"pathParams":{"my-param":"test-path-param"},"state":{"user":{"name":"tipsy","email":"tipsy@tipsy.tipsy"},"role":{"name":"Maintainer"}}}""".uriEncodeForJavascript()
         JavalinVue.stateFunction = { state }
@@ -173,8 +176,8 @@ class TestJavalinVue {
 
     @Test
     fun `vue component works Javalin#error`() = TestUtil.test { app, http ->
-        app.get("/") { it.status(404) }
-        app.error(404, "html", VueComponent("test-component"))
+        app.get("/") { it.status(NOT_FOUND) }
+        app.error(NOT_FOUND, "html", VueComponent("test-component"))
         assertThat(http.htmlGet("/").body).contains("<body><test-component></test-component></body>")
     }
 
@@ -212,14 +215,14 @@ class TestJavalinVue {
 
     @Test
     fun `classpath rootDirectory works`() = TestUtil.test { app, http ->
-        JavalinVue.rootDirectory { it.classpathPath("/vue") }
+        JavalinVue.rootDirectory("/vue")
         app.get("/classpath", VueComponent("test-component"))
         assertThat(http.getBody("/classpath")).contains("<test-component></test-component>")
     }
 
     @Test
     fun `setting rootDirectory with Path works`() = TestUtil.test { app, http ->
-        JavalinVue.rootDirectory { it.explicitPath(Paths.get("src/test/resources/vue")) }
+        JavalinVue.rootDirectory(Paths.get("src/test/resources/vue"))
         app.get("/path", VueComponent("test-component"))
         assertThat(http.getBody("/path")).contains("<test-component></test-component>")
     }
@@ -227,7 +230,7 @@ class TestJavalinVue {
     @Test
     fun `non-existent folder fails`() = TestUtil.test { app, http ->
         JavalinVue.isDev = true // reset
-        JavalinVue.rootDirectory { it.externalPath("/vue") }
+        JavalinVue.rootDirectory("/vue", Location.EXTERNAL)
         app.get("/fail", VueComponent("test-component"))
         assertThat(http.get("/fail").status).isEqualTo(500)
     }
@@ -236,7 +239,7 @@ class TestJavalinVue {
     @Test
     fun `@cdnWebjar resolves to webjar on localhost`() {
         val localhostApp = Javalin.create {
-            it.contextResolvers { it.url = { "http://localhost:1234/" } }
+            it.core.contextResolvers { it.url = { "http://localhost:1234/" } }
         }
         TestUtil.test(localhostApp) { app, http ->
             app.get("/path", VueComponent("test-component"))
@@ -247,7 +250,7 @@ class TestJavalinVue {
     @Test
     fun `@cdnWebjar resolves to cdn on non-localhost`() {
         val nonLocalhostApp = Javalin.create {
-            it.contextResolvers { it.url = { "https://example.com" } }
+            it.core.contextResolvers { it.url = { "https://example.com" } }
         }
         TestUtil.test(nonLocalhostApp) { app, http ->
             app.get("/path", VueComponent("test-component"))
@@ -258,7 +261,7 @@ class TestJavalinVue {
     @Test
     fun `@cdnWebjar resolves to https even on non https hosts`() {
         val nonLocalhostApp = Javalin.create {
-            it.contextResolvers { it.url = { "http://123.123.123.123:1234/" } }
+            it.core.contextResolvers { it.url = { "http://123.123.123.123:1234/" } }
         }
         TestUtil.test(nonLocalhostApp) { app, http ->
             app.get("/path", VueComponent("test-component"))
@@ -269,7 +272,7 @@ class TestJavalinVue {
     @Test
     fun `@inlineFile functionality works as expected if not-dev`() {
         val nonLocalhostApp = Javalin.create {
-            it.contextResolvers { it.url = { "http://123.123.123.123:1234/" } }
+            it.core.contextResolvers { it.url = { "http://123.123.123.123:1234/" } }
         }
         TestUtil.test(nonLocalhostApp) { app, http ->
             app.get("/path", VueComponent("test-component"))
@@ -285,7 +288,7 @@ class TestJavalinVue {
     @Test
     fun `@inlineFile functionality works as expected if dev`() {
         val localhostApp = Javalin.create {
-            it.contextResolvers { it.url = { "http://localhost:1234/" } }
+            it.core.contextResolvers { it.url = { "http://localhost:1234/" } }
         }
         TestUtil.test(localhostApp) { app, http ->
             app.get("/path", VueComponent("test-component"))

@@ -1,8 +1,10 @@
 package io.javalin.http.staticfiles
 
-import io.javalin.core.util.Header
+import io.javalin.http.Header
+import jakarta.servlet.http.HttpServletRequest
 import org.eclipse.jetty.server.handler.ContextHandler.AliasCheck
-import javax.servlet.http.HttpServletRequest
+
+enum class Location { CLASSPATH, EXTERNAL; }
 
 data class StaticFileConfig(
     @JvmField var hostedPath: String = "/",
@@ -14,6 +16,6 @@ data class StaticFileConfig(
     @JvmField var skipFileFunction: (HttpServletRequest) -> Boolean = { false },
 ) {
     internal fun refinedToString(): String {
-        return this.toString().replace(", skipFileFunction=(javax.servlet.http.HttpServletRequest) -> kotlin.Boolean", "")
+        return this.toString().replace(", skipFileFunction=(jakarta.servlet.http.HttpServletRequest) -> kotlin.Boolean", "")
     }
 }

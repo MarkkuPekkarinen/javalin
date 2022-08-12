@@ -7,8 +7,10 @@
  */
 
 package io.javalin;
+
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+
 import kong.unirest.HttpResponse;
 import kong.unirest.Unirest;
 import org.eclipse.jetty.server.Server;
@@ -17,6 +19,8 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+
+import static io.javalin.http.HttpStatus.OK;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -37,7 +41,7 @@ public class TestGracefulShutdown {
 
     @Test
     public void t2_shutdown_is_graceful_when_custom_server_has_statisticshandler() throws Exception {
-        Javalin app = Javalin.create(c -> c.server(() -> {
+        Javalin app = Javalin.create(c -> c.jetty.server(() -> {
             Server server = new Server();
             server.insertHandler(new StatisticsHandler());
             return server;
@@ -48,7 +52,7 @@ public class TestGracefulShutdown {
 
     @Test
     public void t3_shutdown_is_not_graceful_when_custom_server_has_no_statisticshandler() {
-        Javalin app = Javalin.create(c -> c.server(Server::new)).start(0);
+        Javalin app = Javalin.create(c -> c.jetty.server(Server::new)).start(0);
         addEndpoints(app);
         assertThrows(ExecutionException.class, () -> testIfShutdownIsGraceful(app));
     }
@@ -57,11 +61,11 @@ public class TestGracefulShutdown {
         performBlockingRequest(app);
         Future<HttpResponse<String>> asyncResponse = performAsyncRequest(app);
         app.stop(); // request has not completed yet
-        assertEquals(asyncResponse.get().getStatus(), 200);
+        assertEquals(asyncResponse.get().getStatus(), OK.getCode());
     }
 
     private void addEndpoints(Javalin app) {
-        app.get("/immediate-response", context -> context.status(200));
+        app.get("/immediate-response", context -> context.status(OK));
         app.get("/delayed-response", context -> Thread.sleep(LONG_WAIT_TIME_IN_MSECS));
     }
 

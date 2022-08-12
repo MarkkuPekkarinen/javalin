@@ -6,23 +6,23 @@
 
 package io.javalin.http
 
-import io.javalin.core.JavalinConfig
-import io.javalin.core.security.RouteRole
-import io.javalin.core.util.CorsPlugin
-import io.javalin.core.util.LogUtil
+import io.javalin.config.JavalinConfig
 import io.javalin.http.HandlerType.AFTER
 import io.javalin.http.HandlerType.BEFORE
 import io.javalin.http.HandlerType.GET
 import io.javalin.http.HandlerType.HEAD
 import io.javalin.http.HandlerType.OPTIONS
-import io.javalin.http.util.ContextUtil
 import io.javalin.http.util.MethodNotAllowedUtil
+import io.javalin.plugin.bundled.CorsPlugin
+import io.javalin.routing.PathMatcher
+import io.javalin.security.accessManagerNotConfiguredException
+import jakarta.servlet.http.HttpServlet
+import jakarta.servlet.http.HttpServletRequest
+import jakarta.servlet.http.HttpServletResponse
+import jakarta.servlet.http.HttpServletResponseWrapper
 import java.util.*
-import javax.servlet.http.HttpServlet
-import javax.servlet.http.HttpServletRequest
-import javax.servlet.http.HttpServletResponse
 
-class JavalinServlet(val config: JavalinConfig) : HttpServlet() {
+class JavalinServlet(val cfg: JavalinConfig) : HttpServlet() {
 
     val matcher = PathMatcher()
     val exceptionMapper = ExceptionMapper()
@@ -33,56 +33,63 @@ class JavalinServlet(val config: JavalinConfig) : HttpServlet() {
      * You can modify its state to add/remove stages and directly affect the way that Javalin handles requests.
      */
     val lifecycle = mutableListOf(
-        Stage(DefaultName.BEFORE) { submitTask ->
+        Stage(DefaultName.BEFORE, haltsOnException = true) { submitTask ->
             matcher.findEntries(BEFORE, requestUri).forEach { entry ->
-                submitTask { entry.handler.handle(ContextUtil.update(ctx, entry, requestUri)) }
+                submitTask { entry.handle(ctx, requestUri) }
             }
         },
-        Stage(DefaultName.HTTP) { submitTask ->
-            matcher.findEntries(requestType, requestUri).firstOrNull()?.let { entry ->
-                submitTask { entry.handler.handle(ContextUtil.update(ctx, entry, requestUri)) }
+        Stage(DefaultName.HTTP, haltsOnException = true) { submitTask ->
+            matcher.findEntries(ctx.method(), requestUri).firstOrNull()?.let { entry ->
+                submitTask {
+                    when {
+                        /** we wrap the handler with [submitTask] to treat it as a separate stage in [JavalinServletHandler] */
+                        cfg.pvt.accessManager != null -> cfg.pvt.accessManager?.manage({ submitTask { entry.handle(ctx, requestUri) } }, ctx, entry.roles)
+                        entry.roles.isNotEmpty() -> throw accessManagerNotConfiguredException()
+                        else -> entry.handle(ctx, requestUri)
+                    }
+                }
                 return@Stage // return after first match
             }
             submitTask {
-                if (requestType == HEAD && matcher.hasEntries(GET, requestUri)) { // return 200, there is a get handler
+                if (ctx.method() == HEAD && matcher.hasEntries(GET, requestUri)) { // return 200, there is a get handler
                     return@submitTask
                 }
-                if (requestType == HEAD || requestType == GET) { // check for static resources (will write response if found)
-                    if (config.inner.resourceHandler?.handle(it.ctx.req, JavalinResponseWrapper(it.ctx, config, requestType)) == true) return@submitTask
-                    if (config.inner.singlePageHandler.handle(ctx)) return@submitTask
+                if (ctx.method() == HEAD || ctx.method() == GET) { // check for static resources (will write response if found)
+                    if (cfg.pvt.resourceHandler?.handle(it.ctx.req(), JavalinResourceResponseWrapper(it.ctx)) == true) return@submitTask
+                    if (cfg.pvt.singlePageHandler.handle(ctx)) return@submitTask
                 }
-                if (requestType == OPTIONS && config.isCorsEnabled()) { // CORS is enabled, so we return 200 for OPTIONS
+                if (ctx.method() == OPTIONS && cfg.isCorsEnabled()) { // CORS is enabled, so we return 200 for OPTIONS
                     return@submitTask
                 }
-                if (ctx.handlerType == BEFORE) { // no match, status will be 404 or 405 after this point
+                if (ctx.handlerType() == BEFORE) { // no match, status will be 404 or 405 after this point
                     ctx.endpointHandlerPath = "No handler matched request path/method (404/405)"
                 }
                 val availableHandlerTypes = MethodNotAllowedUtil.findAvailableHttpHandlerTypes(matcher, requestUri)
-                if (config.prefer405over404 && availableHandlerTypes.isNotEmpty()) {
+                if (cfg.http.prefer405over404 && availableHandlerTypes.isNotEmpty()) {
                     throw MethodNotAllowedResponse(details = MethodNotAllowedUtil.getAvailableHandlerTypes(ctx, availableHandlerTypes))
                 }
                 throw NotFoundResponse()
             }
         },
-        Stage(DefaultName.ERROR, haltsOnError = false) { submitTask ->
-            submitTask { errorMapper.handle(ctx.status(), ctx) }
+        Stage(DefaultName.ERROR, haltsOnException = false) { submitTask ->
+            submitTask { errorMapper.handle(ctx.statusCode(), ctx) }
         },
-        Stage(DefaultName.AFTER, haltsOnError = false) { submitTask ->
+        Stage(DefaultName.AFTER, haltsOnException = false) { submitTask ->
             matcher.findEntries(AFTER, requestUri).forEach { entry ->
-                submitTask { entry.handler.handle(ContextUtil.update(ctx, entry, requestUri)) }
+                submitTask { entry.handle(ctx, requestUri) }
             }
         }
     )
 
     override fun service(request: HttpServletRequest, response: HttpServletResponse) {
         try {
-            val ctx = Context(request, response, config.inner.appAttributes)
-            LogUtil.setup(ctx, matcher, config.inner.requestLogger != null)
-            ctx.contentType(config.defaultContentType)
+            val ctx = DefaultContext(req = request, res = response, cfg = cfg)
+
+            ctx.contentType(cfg.http.defaultContentType)
 
             JavalinServletHandler(
                 stages = ArrayDeque(lifecycle),
-                config = config,
+                cfg = cfg,
                 errorMapper = errorMapper,
                 exceptionMapper = exceptionMapper,
                 ctx = ctx
@@ -92,11 +99,10 @@ class JavalinServlet(val config: JavalinConfig) : HttpServlet() {
         }
     }
 
-    fun addHandler(handlerType: HandlerType, path: String, handler: Handler, roles: Set<RouteRole>) {
-        val protectedHandler = if (handlerType.isHttpMethod()) Handler { ctx -> config.inner.accessManager.manage(handler, ctx, roles) } else handler
-        matcher.add(HandlerEntry(handlerType, path, config.ignoreTrailingSlashes, protectedHandler, handler))
-    }
+    private fun JavalinConfig.isCorsEnabled() = this.pvt.plugins[CorsPlugin::class.java] != null
 
-    private fun JavalinConfig.isCorsEnabled() = this.inner.plugins[CorsPlugin::class.java] != null
+    private class JavalinResourceResponseWrapper(private val ctx: Context) : HttpServletResponseWrapper(ctx.res()) {
+        override fun getOutputStream() = ctx.outputStream()
+    }
 
 }

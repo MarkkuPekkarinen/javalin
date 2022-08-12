@@ -6,10 +6,16 @@
 
 package io.javalin.jetty
 
-import io.javalin.core.JavalinConfig
-import io.javalin.core.util.JavalinLogger
-import io.javalin.core.util.Util
+import io.javalin.config.JavalinConfig
+import io.javalin.util.JavalinLogger
+import io.javalin.util.Util
+import io.javalin.util.Util.logJavalinBanner
+import jakarta.servlet.http.HttpServletRequest
+import jakarta.servlet.http.HttpServletResponse
+import org.eclipse.jetty.http.HttpCookie
+import org.eclipse.jetty.http.UriCompliance
 import org.eclipse.jetty.server.Handler
+import org.eclipse.jetty.server.HttpConfiguration
 import org.eclipse.jetty.server.HttpConnectionFactory
 import org.eclipse.jetty.server.Request
 import org.eclipse.jetty.server.Server
@@ -19,11 +25,10 @@ import org.eclipse.jetty.server.handler.HandlerWrapper
 import org.eclipse.jetty.server.session.SessionHandler
 import org.eclipse.jetty.servlet.ServletContextHandler
 import org.eclipse.jetty.servlet.ServletHolder
+import org.eclipse.jetty.websocket.server.config.JettyWebSocketServletContainerInitializer
 import java.net.BindException
-import javax.servlet.http.HttpServletRequest
-import javax.servlet.http.HttpServletResponse
 
-class JettyServer(val config: JavalinConfig) {
+class JettyServer(val cfg: JavalinConfig) {
 
     @JvmField
     var started = false
@@ -31,30 +36,34 @@ class JettyServer(val config: JavalinConfig) {
     var serverHost: String? = null
 
     fun server(): Server {
-        config.inner.server = config.inner.server ?: JettyUtil.getOrDefault(config.inner.server)
-        return config.inner.server!!
+        cfg.pvt.server = cfg.pvt.server ?: JettyUtil.getOrDefault(cfg.pvt.server)
+        return cfg.pvt.server!!
     }
 
     @Throws(BindException::class)
     fun start(wsAndHttpServlet: JavalinJettyServlet) {
-        if (serverPort == -1 && config.inner.server == null) {
+        if (serverPort == -1 && cfg.pvt.server == null) {
             serverPort = 8080
             JavalinLogger.startup("No port specified, starting on port $serverPort. Call start(port) to change ports.")
         }
 
-        config.inner.sessionHandler = config.inner.sessionHandler ?: defaultSessionHandler()
+        cfg.pvt.sessionHandler = cfg.pvt.sessionHandler ?: defaultSessionHandler()
         val nullParent = null // javalin handlers are orphans
 
-        val wsAndHttpHandler = object : ServletContextHandler(nullParent, Util.normalizeContextPath(config.contextPath), SESSIONS) {
+        val wsAndHttpHandler = object : ServletContextHandler(nullParent, Util.normalizeContextPath(cfg.routing.contextPath), SESSIONS) {
             override fun doHandle(target: String, jettyRequest: Request, request: HttpServletRequest, response: HttpServletResponse) {
                 request.setAttribute("jetty-target", target) // used in JettyResourceHandler
                 request.setAttribute("jetty-request", jettyRequest)
                 nextHandle(target, jettyRequest, request, response)
             }
         }.apply {
-            this.sessionHandler = config.inner.sessionHandler
-            config.inner.servletContextHandlerConsumer?.accept(this)
+            this.sessionHandler = cfg.pvt.sessionHandler
+            cfg.pvt.servletContextHandlerConsumer?.accept(this)
             addServlet(ServletHolder(wsAndHttpServlet), "/*")
+            // Initializes WebSocketComponents
+            JettyWebSocketServletContainerInitializer.configure(this) { _, _ ->
+                /* we don't want to configure WebSocketMappings during ServletContext initialization phase */
+            }
         }
 
         server().apply {
@@ -64,31 +73,41 @@ class JettyServer(val config: JavalinConfig) {
             }
         }.start()
 
-        JavalinLogger.logAllDelayed()
+        logJavalinBanner(cfg.core.showJavalinBanner)
+
+        cfg.pvt.resourceHandler?.init(mapOf("server" to server()))
 
         server().connectors.filterIsInstance<ServerConnector>().forEach {
-            JavalinLogger.startup("Listening on ${it.protocol}://${it.host ?: "localhost"}:${it.localPort}${config.contextPath}")
+            JavalinLogger.startup("Listening on ${it.protocol}://${it.host ?: "localhost"}:${it.localPort}${cfg.routing.contextPath}")
         }
 
         server().connectors.filter { it !is ServerConnector }.forEach {
             JavalinLogger.startup("Binding to: $it")
         }
 
-        JettyUtil.reEnableJettyLogger()
         serverPort = (server().connectors[0] as? ServerConnector)?.localPort ?: -1
     }
 
-    private fun defaultConnector(server: Server) = ServerConnector(server).apply {
-        this.port = serverPort
-        this.host = serverHost
-        this.connectionFactories.forEach {
-            if (it is HttpConnectionFactory) {
-                it.httpConfiguration.sendServerVersion = false
+    private fun defaultConnector(server: Server): ServerConnector {
+        // TODO: Required to support ignoreTrailingSlashes, because Jetty 11 will refuse requests with doubled slashes
+        val httpConfiguration = HttpConfiguration()
+        httpConfiguration.uriCompliance = UriCompliance.RFC3986 // accept ambiguous values in path and let Javalin handle them
+
+        return ServerConnector(server, HttpConnectionFactory(httpConfiguration)).apply {
+            this.port = serverPort
+            this.host = serverHost
+            this.connectionFactories.forEach {
+                if (it is HttpConnectionFactory) {
+                    it.httpConfiguration.sendServerVersion = false
+                }
             }
         }
     }
 
-    private fun defaultSessionHandler() = SessionHandler().apply { httpOnly = true }
+    private fun defaultSessionHandler() = SessionHandler().apply {
+        httpOnly = true
+        sameSite = HttpCookie.SameSite.LAX
+    }
 
     private val ServerConnector.protocol get() = if (protocols.contains("ssl")) "https" else "http"
 

@@ -1,12 +1,13 @@
 package io.javalin
 
+import io.javalin.http.HttpStatus.OK
 import io.javalin.testing.TestUtil
 import jnr.unixsocket.UnixSocketAddress
 import jnr.unixsocket.UnixSocketChannel
 import org.assertj.core.api.Assertions.assertThat
 import org.eclipse.jetty.server.Server
 import org.eclipse.jetty.server.ServerConnector
-import org.eclipse.jetty.unixsocket.UnixSocketConnector
+import org.eclipse.jetty.unixsocket.server.UnixSocketConnector
 import org.junit.jupiter.api.Test
 import java.io.BufferedReader
 import java.io.BufferedWriter
@@ -28,7 +29,7 @@ class TestUnixSocketConnector {
         val expectedResultString = "hello unixsocket"
 
         val unixSocketJavalin = Javalin.create {
-            it.server {
+            it.jetty.server {
                 val server = Server()
                 val serverConnector = ServerConnector(server)
                 serverConnector.port = 0
@@ -40,7 +41,7 @@ class TestUnixSocketConnector {
             }
         }
 
-        unixSocketJavalin.get(testPath) { it.status(200).result(expectedResultString) }
+        unixSocketJavalin.get(testPath) { it.status(OK).result(expectedResultString) }
 
         TestUtil.test(unixSocketJavalin) { _, _ ->
 

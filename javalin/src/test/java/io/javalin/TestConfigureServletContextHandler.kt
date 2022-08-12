@@ -9,18 +9,18 @@ package io.javalin
 
 import io.javalin.testing.HttpUtil
 import io.javalin.testing.TestUtil
+import jakarta.servlet.DispatcherType
+import jakarta.servlet.Filter
+import jakarta.servlet.FilterChain
+import jakarta.servlet.FilterConfig
+import jakarta.servlet.ServletContextEvent
+import jakarta.servlet.ServletContextListener
+import jakarta.servlet.ServletRequest
+import jakarta.servlet.ServletResponse
 import org.assertj.core.api.Assertions.assertThat
 import org.eclipse.jetty.servlet.FilterHolder
 import org.junit.jupiter.api.Test
 import java.util.*
-import javax.servlet.DispatcherType
-import javax.servlet.Filter
-import javax.servlet.FilterChain
-import javax.servlet.FilterConfig
-import javax.servlet.ServletContextEvent
-import javax.servlet.ServletContextListener
-import javax.servlet.ServletRequest
-import javax.servlet.ServletResponse
 
 class TestConfigureServletContextHandler {
 
@@ -38,7 +38,7 @@ class TestConfigureServletContextHandler {
         }
 
         val app = Javalin.create {
-            it.configureServletContextHandler { handler ->
+            it.jetty.contextHandlerConfig { handler ->
                 handler.addEventListener(listener)
             }
         }.start(0)
@@ -70,7 +70,7 @@ class TestConfigureServletContextHandler {
         }
 
         val filterJavalin = Javalin.create {
-            it.configureServletContextHandler { handler ->
+            it.jetty.contextHandlerConfig { handler ->
                 handler.addFilter(FilterHolder(filter), "/*", EnumSet.allOf(DispatcherType::class.java))
             }
         }
