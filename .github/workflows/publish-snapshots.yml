@@ -6,7 +6,11 @@ on:
 
 jobs:
   publish:
-    if: github.repository == 'javalin/javalin'
+    if: |
+      github.repository == 'javalin/javalin' &&
+      !contains(github.event.head_commit.message, '[maven-release-plugin] prepare release')
+      
+
     name: Publish snapshot
     runs-on: ubuntu-latest
     steps:
@@ -27,4 +31,4 @@ jobs:
               "password": "${{ secrets.MAVEN_SECRET }}"
             }]
       - name: Publish with Maven
-        run: ./mvnw -DRunningOnCi=true clean deploy --file pom.xml --batch-mode --fail-never -P publish-snapshot
+        run: ./mvnw -DRunningOnCi=true clean deploy --file pom.xml --batch-mode -P publish-snapshot

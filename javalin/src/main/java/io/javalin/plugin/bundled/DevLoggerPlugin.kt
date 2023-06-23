@@ -17,8 +17,8 @@ internal class DevLoggingPlugin : Plugin, PluginLifecycleInit {
     lateinit var matcher: PathMatcher
 
     override fun apply(app: Javalin) {
-        app.cfg.requestLoggers.http { ctx, ms -> requestDevLogger(matcher, ctx, ms) }
-        app.cfg.requestLoggers.webSocket { wsDevLogger(it) }
+        app.cfg.requestLogger.http { ctx, ms -> requestDevLogger(matcher, ctx, ms) }
+        app.cfg.requestLogger.ws { wsDevLogger(it) }
         matcher = app.javalinServlet().matcher
     }
 
@@ -62,19 +62,14 @@ fun requestDevLogger(matcher: PathMatcher, ctx: Context, time: Float) = try {
 private fun String.probablyFormData() = this.trim().firstOrNull()?.isLetter() == true && this.split("=").size >= 2
 
 private fun resBody(ctx: Context): String {
-    val staticFile = ctx.req().getAttribute("handled-as-static-file") == true
-    if (staticFile) {
-        return "Body is a static file (not logged)"
-    }
-
-    val stream = ctx.resultStream() ?: return "No body was set"
+    val stream = ctx.resultInputStream() ?: return "No body was set"
     if (!stream.markSupported()) {
         return "Body is binary (not logged)"
     }
 
     val gzipped = ctx.res().getHeader(Header.CONTENT_ENCODING) == "gzip"
     val brotlied = ctx.res().getHeader(Header.CONTENT_ENCODING) == "br"
-    val resBody = ctx.resultString()!!
+    val resBody = ctx.result()!!
     return when {
         gzipped -> "Body is gzipped (${resBody.length} bytes, not logged)"
         brotlied -> "Body is brotlied (${resBody.length} bytes, not logged)"
@@ -95,7 +90,7 @@ private fun WsContext.logEvent(event: String, additionalInfo: String = "") {
     JavalinLogger.info(
         """|JAVALIN WEBSOCKET DEBUG LOG
            |WebSocket Event: $event
-           |Session Id: ${this.sessionId}
+           |Session Id: ${this.sessionId()}
            |Host: ${this.host()}
            |Matched Path: ${this.matchedPath()}
            |PathParams: ${this.pathParamMap()}

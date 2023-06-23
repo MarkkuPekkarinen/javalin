@@ -7,26 +7,39 @@
 package io.javalin.http
 
 import io.javalin.config.contextResolver
+import io.javalin.http.servlet.attributeOrCompute
+import io.javalin.http.servlet.cacheAndSetSessionAttribute
+import io.javalin.http.servlet.cachedSessionAttributeOrCompute
+import io.javalin.http.servlet.getBasicAuthCredentials
+import io.javalin.http.servlet.getCachedRequestAttributeOrSessionAttribute
+import io.javalin.http.servlet.getRequestCharset
+import io.javalin.http.servlet.readAndResetStreamIfPossible
+import io.javalin.http.servlet.splitKeyValueStringAndGroupByKey
+import io.javalin.http.servlet.throwContentTooLargeIfContentTooLarge
 import io.javalin.http.util.AsyncUtil
-import io.javalin.http.util.AsyncUtil.ASYNC_EXECUTOR_KEY
 import io.javalin.http.util.CookieStore
 import io.javalin.http.util.MultipartUtil
 import io.javalin.http.util.SeekableWriter
 import io.javalin.json.jsonMapper
-import io.javalin.rendering.JavalinRenderer
+import io.javalin.rendering.fileRenderer
 import io.javalin.security.BasicAuthCredentials
+import io.javalin.util.function.ThrowingRunnable
 import io.javalin.validation.BodyValidator
 import io.javalin.validation.Validator
 import jakarta.servlet.ServletOutputStream
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import java.io.InputStream
+import java.lang.reflect.Type
 import java.nio.charset.Charset
 import java.util.*
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeoutException
-import java.util.function.Consumer
+import java.util.function.Supplier
+import java.util.stream.Stream
+import kotlin.reflect.javaType
+import kotlin.reflect.typeOf
 
 /**
  * Provides access to functions for handling the request and response
@@ -48,7 +61,7 @@ interface Context {
     /** Gets the handler type of the current handler */
     fun handlerType(): HandlerType
 
-    /** * Gets the path that was used to match request (also includes before/after paths) */
+    /** Gets the path that was used to match request (also includes before/after paths) */
     fun matchedPath(): String
 
     /** Gets the endpoint path that was used to match request (null in before, available in endpoint/after) */
@@ -105,7 +118,7 @@ interface Context {
 
     /**
      * Gets the request body as a [ByteArray].
-     * Calling this method returns the body as a [ByteArray]. If [io.javalin.JavalinConfig.maxRequestSize]
+     * Calling this method returns the body as a [ByteArray]. If [io.javalin.config.JavalinConfig.maxRequestSize]
      * is set and body is bigger than its value, a [io.javalin.http.HttpResponseException] is throw,
      * with status 413 CONTENT_TOO_LARGE.
      */
@@ -114,14 +127,17 @@ interface Context {
         return req().inputStream.readBytes()
     }
 
-    /** Maps a JSON body to a Java/Kotlin class using the registered [io.javalin.plugin.json.JsonMapper] */
-    fun <T> bodyAsClass(clazz: Class<T>): T = jsonMapper().fromJsonString(body(), clazz)
+    /** Maps a JSON body to a Java/Kotlin class using the registered [io.javalin.json.JsonMapper] */
+    fun <T> bodyAsClass(type: Type): T = jsonMapper().fromJsonString(body(), type)
 
-    /** Maps a JSON body to a Java/Kotlin class using the registered [io.javalin.plugin.json.JsonMapper] */
-    fun <T> bodyStreamAsClass(clazz: Class<T>): T = jsonMapper().fromJsonStream(req().inputStream, clazz)
+    /** Maps a JSON body to a Java/Kotlin class using the registered [io.javalin.json.JsonMapper] */
+    fun <T> bodyAsClass(clazz: Class<T>): T = bodyAsClass(type = clazz as Type)
 
-    /** Gets the request body as a [InputStream] */
-    fun bodyAsInputStream(): InputStream = req().inputStream
+    /** Maps a JSON body to a Java/Kotlin class using the registered [io.javalin.json.JsonMapper] */
+    fun <T> bodyStreamAsClass(type: Type): T = jsonMapper().fromJsonStream(req().inputStream, type)
+
+    /** Gets the underlying [InputStream] for the request body */
+    fun bodyInputStream(): InputStream = req().inputStream
 
     /** Creates a typed [BodyValidator] for the body() value */
     fun <T> bodyValidator(clazz: Class<T>) = BodyValidator(body(), clazz, this.jsonMapper())
@@ -200,6 +216,9 @@ interface Context {
     @Suppress("UNCHECKED_CAST")
     fun <T> attribute(key: String): T? = req().getAttribute(key) as? T
 
+    /** Gets specified [attribute], or computes the value from callback (and sets the attribute) */
+    fun <T> attributeOrCompute(key: String, callback: (Context) -> T): T? = attributeOrCompute(callback, key, this)
+
     /** Gets a map with all the attribute keys and values on the request(). */
     fun attributeMap(): Map<String, Any?> = req().attributeNames.asSequence().associateWith { attribute(it) as Any? }
 
@@ -251,12 +270,23 @@ interface Context {
         else -> listOf()
     }
 
+    /**
+     * Gets a map of all uploaded files as a map where the key is the name of the parameter the file was uploaded as and
+     * the value is the list of files uploaded under that parameter.
+     *
+     * If called on a non-multipart request this returns an empty map
+     */
+    fun uploadedFileMap(): Map<String, List<UploadedFile>> = when {
+        isMultipartFormData() -> MultipartUtil.getUploadedFileMap(req())
+        else -> emptyMap()
+    }
+
     ///////////////////////////////////////////////////////////////
     // Response-ish methods
     ///////////////////////////////////////////////////////////////
 
     /** Gets the current response [Charset]. */
-    private fun responseCharset() = runCatching { Charset.forName(res().characterEncoding) }.getOrElse { Charset.defaultCharset() }
+    fun responseCharset(): Charset = runCatching { Charset.forName(res().characterEncoding) }.getOrElse { Charset.defaultCharset() }
 
     /**
      * Gets output-stream you can write to.
@@ -268,13 +298,11 @@ interface Context {
 
     /**
      * Writes the specified inputStream as a seekable stream.
-     * This method is asynchronous and uses the global predefined executor
-     * service stored in [appAttribute] as [ASYNC_EXECUTOR_KEY].
      * You can change this default in [io.javalin.config.JavalinConfig].
      *
      * @return the [CompletableFuture] used to write the seekable stream
      */
-    fun writeSeekableStream(inputStream: InputStream, contentType: String, size: Long) = SeekableWriter.write(this, inputStream, contentType, size)
+    fun writeSeekableStream(inputStream: InputStream, contentType: String, totalBytes: Long) = SeekableWriter.write(this, inputStream, contentType, totalBytes)
 
     /**
      * Writes input stream to [writeSeekableStream] with currently available data ([InputStream.available])
@@ -286,34 +314,32 @@ interface Context {
      * Sets context result to the specified [String].
      * Will overwrite the current result if there is one.
      */
-    fun result(resultString: String) = result(resultString.byteInputStream(responseCharset()))
+    fun result(resultString: String): Context = result(resultString.byteInputStream(responseCharset()))
 
     /**
      * Sets context result to the specified array of bytes.
      * Will overwrite the current result if there is one.
      */
-    fun result(resultBytes: ByteArray) = result(resultBytes.inputStream())
+    fun result(resultBytes: ByteArray): Context = result(resultBytes.inputStream())
 
     /**
      * Sets context result to the specified [InputStream].
      * Will overwrite the current result if there is one.
      */
-    fun result(resultStream: InputStream): Context {
-        runCatching { resultStream()?.close() } // avoid memory leaks for multiple result() calls
-        return this.future(CompletableFuture.completedFuture(resultStream), callback = { /* noop */ })
-    }
+    fun result(resultStream: InputStream): Context
 
-    /** Gets the current [resultStream] as a [String] (if possible), and reset the underlying stream */
-    fun resultString() = readAndResetStreamIfPossible(resultStream(), responseCharset())
+    /** Gets the current [io.javalin.http.servlet.JavalinServletContext.resultInputStream] as a [String] (if set), and reset the underlying stream */
+    fun result(): String? = readAndResetStreamIfPossible(resultInputStream(), responseCharset())
 
-    /** Extracts input stream from latest result if possible */
-    fun resultStream(): InputStream?
+    /** Gets the underlying [InputStream] for the result ([io.javalin.http.servlet.JavalinServletContext.resultInputStream]) */
+    fun resultInputStream(): InputStream?
 
     /**
      * Utility function that allows to run async task on top of the [Context.future] method.
      * It means you should treat provided task as a result of this handler, and you can't use any other result function simultaneously.
      *
-     * @param executor Thread-pool used to execute the given task
+     * @param executor Thread-pool used to execute the given task,
+     * You can change this default in [io.javalin.config.JavalinConfig].
      *
      * @param timeout Timeout in milliseconds,
      * by default it's 0 which means timeout watcher is disabled.
@@ -326,20 +352,14 @@ interface Context {
      * because it'll most likely be executed when the connection is already closed,
      * so it's just not thread-safe.
      */
-    fun async(executor: ExecutorService, timeout: Long, onTimeout: (() -> Unit)?, task: Runnable): CompletableFuture<*> = AsyncUtil.submitAsyncTask(this, executor, timeout, onTimeout, task)
+    fun async(executor: ExecutorService? = null, timeout: Long = 0L, onTimeout: Runnable?, task: ThrowingRunnable<Exception>) =
+        AsyncUtil.submitAsyncTask(this, executor, timeout, onTimeout, task)
 
-    /**
-     * Launch async task with default, globally predefined executor service stored in [appAttribute] as [ASYNC_EXECUTOR_KEY].
-     * You can change this default in [io.javalin.config.JavalinConfig].
-     * @see [async]
-     */
-    fun async(timeout: Long = 0L, onTimeout: (() -> Unit)? = null, task: Runnable): CompletableFuture<*> = async(appAttribute(ASYNC_EXECUTOR_KEY), timeout, onTimeout, task)
+    /** @see [async] */
+    fun async(timeout: Long, onTimeout: Runnable? = null, task: ThrowingRunnable<Exception>) = async(executor = null, timeout = timeout, onTimeout = onTimeout, task = task)
 
-    /**
-     * Launch async task with default async executor and without custom timeout
-     * @see [async]
-     */
-    fun async(task: Runnable): CompletableFuture<*> = async(task = task, timeout = 0L, onTimeout = null)
+    /* @see [async] */
+    fun async(task: ThrowingRunnable<Exception>) = async(onTimeout = null, task = task)
 
     /**
      * The main entrypoint for all async related functionalities exposed by [Context].
@@ -348,22 +368,9 @@ interface Context {
      *  Upon this value Javalin will schedule further execution of this request().
      *  When servlet will detect that the given future is completed, request will be executed synchronously,
      *  otherwise request will be executed asynchronously by a thread which will complete the future.
-     * @param launch Optional callback that provides a possibility to launch any kind of async execution in a thread-safe way.
-     *  Any async task that will mutate [Context] should be submitted to the executor in this scope to eliminate race-conditions between threads.
-     * @param callback Optional callback used to process result from the specified future.
-     *  The default callback (used if no callback is provided) can be configured through [io.javalin.config.ContextResolver.defaultFutureCallback]
      * @throws IllegalStateException if result was already set
      */
-    fun <T> future(future: CompletableFuture<T>, launch: Runnable?, callback: Consumer<T>?): Context
-
-    /** See the main `future(CompletableFuture<T>, Runnable, Consumer<T>)` method for details. */
-    fun <T> future(future: CompletableFuture<T>): Context = future(future = future, callback = null)
-
-    /** See the main `future(CompletableFuture<T>, Runnable, Consumer<T>)` method for details. */
-    fun <T> future(future: CompletableFuture<T>, callback: Consumer<T>?): Context = future(future = future, launch = null, callback = callback)
-
-    /** Gets the current context result as a [CompletableFuture] (if set). */
-    fun resultFuture(): CompletableFuture<*>?
+    fun future(future: Supplier<out CompletableFuture<*>>)
 
     /** Sets response content type to specified [String] value. */
     fun contentType(contentType: String): Context = also { res().contentType = contentType }
@@ -375,12 +382,7 @@ interface Context {
     fun header(name: String, value: String): Context = also { res().setHeader(name, value) }
 
     /** Redirects to location with given status. Skips HTTP handler if called in before-handler */
-    fun redirect(location: String, status: HttpStatus) {
-        header(Header.LOCATION, location).status(status).result("Redirected")
-        if (handlerType() == HandlerType.BEFORE) {
-            throw SkipHttpHandlerException()
-        }
-    }
+    fun redirect(location: String, status: HttpStatus)
 
     /** Redirects to location with status [HttpStatus.FOUND]. Skips HTTP handler if called in before-handler */
     fun redirect(location: String) = redirect(location, HttpStatus.FOUND)
@@ -413,16 +415,31 @@ interface Context {
     fun removeCookie(name: String): Context = removeCookie(name, "/")
 
     /**
-     * Serializes object to a JSON-string using the registered [io.javalin.plugin.json.JsonMapper] and sets it as the context result.
+     * Serializes object to a JSON-string using the registered [io.javalin.json.JsonMapper] and sets it as the context result.
      * Also sets content type to application/json.
      */
-    fun json(obj: Any): Context = contentType(ContentType.APPLICATION_JSON).result(jsonMapper().toJsonString(obj))
+    fun json(obj: Any, type: Type): Context = contentType(ContentType.APPLICATION_JSON).result(jsonMapper().toJsonString(obj, type))
+
+    /** @see [json] */
+    fun json(obj: Any): Context = json(obj, obj::class.java)
 
     /**
-     * Serializes object to a JSON-stream using the registered [io.javalin.plugin.json.JsonMapper] and sets it as the context result.
+     * Serializes object to a JSON-stream using the registered [io.javalin.json.JsonMapper] and sets it as the context result.
      * Also sets content type to application/json.
      */
-    fun jsonStream(obj: Any): Context = contentType(ContentType.APPLICATION_JSON).result(jsonMapper().toJsonStream(obj))
+    fun jsonStream(obj: Any, type: Type): Context = contentType(ContentType.APPLICATION_JSON).result(jsonMapper().toJsonStream(obj, type))
+
+    /** @see [jsonStream] */
+    fun jsonStream(obj: Any): Context = jsonStream(obj, obj::class.java)
+
+    /**
+     * Consumes the specified stream with the configured JsonMapper, which transforms the stream's
+     * content to JSON, writing the results directly to the response's `outputStream` as the stream
+     * is consumed. This function call is synchronous, and may be wrapped in `ctx.async { }` if needed.
+     */
+    fun writeJsonStream(stream: Stream<*>) = jsonMapper().writeToOutputStream(
+        stream, this.contentType(ContentType.APPLICATION_JSON).outputStream()
+    )
 
     /** Sets context result to specified html string and sets content-type to text/html. */
     fun html(html: String): Context = contentType(ContentType.TEXT_HTML).result(html)
@@ -432,30 +449,42 @@ interface Context {
      * Also sets content-type to text/html.
      * Determines the correct rendering-function based on the file extension.
      */
-    fun render(filePath: String, model: Map<String, Any?>): Context = html(JavalinRenderer.renderBasedOnExtension(filePath, model, this))
+    fun render(filePath: String, model: Map<String, Any?>): Context = html(fileRenderer().render(filePath, model, this))
 
     /** @see render() */
     fun render(filePath: String): Context = render(filePath, mutableMapOf())
 
+    ///////////////////////////////////////////////////////////////
+    // Other methods
+    ///////////////////////////////////////////////////////////////
+
+    fun skipRemainingHandlers(): Context
+
 }
 
-/** Reified version of [bodyAsClass] (Kotlin only) */
-inline fun <reified T : Any> Context.bodyAsClass(): T = bodyAsClass(T::class.java)
+/** Reified version of [Context.json] (Kotlin only) */
+@OptIn(ExperimentalStdlibApi::class)
+inline fun <reified T : Any> Context.jsonAsType(obj: T): Context = json(obj, typeOf<T>().javaType)
 
-/** Reified version of [formParamAsClass] (Kotlin only) */
-inline fun <reified T : Any> Context.formParamAsClass(key: String) = formParamAsClass(key, T::class.java)
+/** Reified version of [Context.bodyAsClass] (Kotlin only) */
+@OptIn(ExperimentalStdlibApi::class)
+inline fun <reified T : Any> Context.bodyAsClass(): T = bodyAsClass(typeOf<T>().javaType)
 
-/** Reified version of [bodyStreamAsClass] (Kotlin only) */
-inline fun <reified T : Any> Context.bodyStreamAsClass(): T = bodyStreamAsClass(T::class.java)
+/** Reified version of [Context.bodyStreamAsClass] (Kotlin only) */
+@OptIn(ExperimentalStdlibApi::class)
+inline fun <reified T : Any> Context.bodyStreamAsClass(): T = bodyStreamAsClass(typeOf<T>().javaType)
 
-/** Reified version of [bodyValidator] (Kotlin only) */
-inline fun <reified T : Any> Context.bodyValidator() = bodyValidator(T::class.java)
+/** Reified version of [Context.bodyValidator] (Kotlin only) */
+inline fun <reified T : Any> Context.bodyValidator(): BodyValidator<T> = bodyValidator(T::class.java)
 
-/** Reified version of [pathParamAsClass] (Kotlin only) */
-inline fun <reified T : Any> Context.pathParamAsClass(key: String) = pathParamAsClass(key, T::class.java)
+/** Reified version of [Context.pathParamAsClass] (Kotlin only) */
+inline fun <reified T : Any> Context.pathParamAsClass(key: String): Validator<T> = pathParamAsClass(key, T::class.java)
 
-/** Reified version of [headerAsClass] (Kotlin only) */
-inline fun <reified T : Any> Context.headerAsClass(header: String) = headerAsClass(header, T::class.java)
+/** Reified version of [Context.headerAsClass] (Kotlin only) */
+inline fun <reified T : Any> Context.headerAsClass(header: String): Validator<T> = headerAsClass(header, T::class.java)
 
-/** Reified version of [queryParamAsClass] (Kotlin only) */
-inline fun <reified T : Any> Context.queryParamAsClass(key: String) = queryParamAsClass(key, T::class.java)
+/** Reified version of [Context.queryParamAsClass] (Kotlin only) */
+inline fun <reified T : Any> Context.queryParamAsClass(key: String): Validator<T> = queryParamAsClass(key, T::class.java)
+
+/** Reified version of [Context.formParamAsClass] (Kotlin only) */
+inline fun <reified T : Any> Context.formParamAsClass(key: String): Validator<T> = formParamAsClass(key, T::class.java)

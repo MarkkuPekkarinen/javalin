@@ -13,15 +13,12 @@ import jakarta.servlet.http.Part
 import java.nio.charset.Charset
 
 object MultipartUtil {
-    private const val MULTIPART_CONFIG_ATTRIBUTE = "org.eclipse.jetty.multipartConfig"
+    const val MULTIPART_CONFIG_ATTRIBUTE = "org.eclipse.jetty.multipartConfig"
+    private val defaultConfig = MultipartConfigElement(System.getProperty("java.io.tmpdir"), -1, -1, 1)
 
     var preUploadFunction: (HttpServletRequest) -> Unit = { req ->
-        val existingConfig = req.getAttribute(MULTIPART_CONFIG_ATTRIBUTE)
-        if (existingConfig == null) {
-            req.setAttribute(
-                MULTIPART_CONFIG_ATTRIBUTE,
-                MultipartConfigElement(System.getProperty("java.io.tmpdir"), -1, -1, 1)
-            )
+        if (req.getAttribute(MULTIPART_CONFIG_ATTRIBUTE) == null) {
+            req.setAttribute(MULTIPART_CONFIG_ATTRIBUTE, defaultConfig)
         }
     }
 
@@ -35,14 +32,23 @@ object MultipartUtil {
         return req.parts.filter(this::isFile).map { UploadedFile(it) }
     }
 
+    fun getUploadedFileMap(req: HttpServletRequest): Map<String, List<UploadedFile>> {
+        preUploadFunction(req)
+        return req
+            .parts
+            .filter(this::isFile)
+            .groupBy { it.name }
+            .mapValues { entry -> entry.value.map { UploadedFile(it) } }
+    }
+
     fun getFieldMap(req: HttpServletRequest): Map<String, List<String>> {
         preUploadFunction(req)
         return req.parts.associate { part -> part.name to getPartValue(req, part.name) }
     }
 
     private fun getPartValue(req: HttpServletRequest, partName: String): List<String> {
-        return req.parts.filter { isField(it) && it.name == partName }.map { filePart ->
-            filePart.inputStream.use { it.readBytes().toString(Charset.forName("UTF-8")) }
+        return req.parts.filter { isField(it) && it.name == partName }.map { part ->
+            part.inputStream.use { it.readBytes().toString(Charset.forName("UTF-8")) }
         }.toList()
     }
 

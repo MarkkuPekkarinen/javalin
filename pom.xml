@@ -5,17 +5,12 @@
         <module>javalin</module>
         <module>javalin-bundle</module>
         <module>javalin-testtools</module>
+        <module>javalin-micrometer</module>
     </modules>
-
-    <parent>
-        <groupId>org.sonatype.oss</groupId>
-        <artifactId>oss-parent</artifactId>
-        <version>7</version>
-    </parent>
 
     <groupId>io.javalin</groupId>
     <artifactId>javalin-parent</artifactId>
-    <version>5.0.0-SNAPSHOT</version>
+    <version>6.0.0-SNAPSHOT</version>
 
     <name>Javalin (parent)</name>
     <description>Javalin: Simple REST APIs for Java and Kotlin</description>
@@ -29,9 +24,9 @@
         </license>
     </licenses>
     <scm>
-        <connection>scm:git:git@github.com:tipsy/javalin.git</connection>
-        <developerConnection>scm:git:git@github.com:tipsy/javalin.git</developerConnection>
-        <url>https://github.com/tipsy/javalin.git</url>
+        <connection>scm:git:git@github.com:javalin/javalin.git</connection>
+        <developerConnection>scm:git:git@github.com:javalin/javalin.git</developerConnection>
+        <url>https://github.com/javalin/javalin.git</url>
         <tag>HEAD</tag>
     </scm>
     <developers>
@@ -41,10 +36,14 @@
     </developers>
     <issueManagement>
         <system>GitHub Issue Tracker</system>
-        <url>https://github.com/tipsy/javalin/issues</url>
+        <url>https://github.com/javalin/javalin/issues</url>
     </issueManagement>
 
     <distributionManagement>
+        <repository>
+            <id>sonatype-nexus-staging</id>
+            <url>https://oss.sonatype.org/service/local/staging/deploy/maven2/</url>
+        </repository>
         <snapshotRepository>
             <name>Reposilite Maven Repository</name>
             <id>reposilite-repository</id>
@@ -58,12 +57,10 @@
         <copy-build-resources.skip>true</copy-build-resources.skip>
 
         <dokka.jdkVersion>11</dokka.jdkVersion>
-        <dokka.skip>true</dokka.skip>
-        <javadoc.skip>true</javadoc.skip>
 
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-        <kotlin.version>1.7.10</kotlin.version>
+        <kotlin.version>1.8.21</kotlin.version>
         <kotlin.compiler.jvmTarget>11</kotlin.compiler.jvmTarget>
         <kotlin.compiler.incremental>true</kotlin.compiler.incremental>
         <maven.build.timestamp.format>yyyy-MM-dd'T'HH:mm:ss'Z'</maven.build.timestamp.format>
@@ -71,40 +68,41 @@
         <!-- PLUGINS -->
         <compiler.plugin.version>3.10.1</compiler.plugin.version>
         <dokka.plugin.version>1.7.0</dokka.plugin.version>
+        <javadoc.plugin.version>3.5.0</javadoc.plugin.version>
         <gpg.plugin.version>3.0.1</gpg.plugin.version>
         <jar.plugin.version>3.2.2</jar.plugin.version>
-        <surefire.plugin.version>3.0.0-M7</surefire.plugin.version>
-        <antrun.plugin.version>3.1.0</antrun.plugin.version>
+        <surefire.plugin.version>3.0.0</surefire.plugin.version>
         <shade.plugin.version>3.3.0</shade.plugin.version>
-        <javadoc.plugin.version>3.4.0</javadoc.plugin.version>
         <build-helper.plugin.version>3.3.0</build-helper.plugin.version>
         <enforcer.plugin.version>3.1.0</enforcer.plugin.version>
         <clean.plugin.version>3.2.0</clean.plugin.version>
         <install.plugin.version>3.0.0-M1</install.plugin.version>
         <resources.plugin.version>3.2.0</resources.plugin.version>
         <source.plugin.version>3.2.1</source.plugin.version>
+        <moditect.plugin.version>1.0.0.Final</moditect.plugin.version>
+        <maven.javadoc.skip>true</maven.javadoc.skip> <!-- property used by the javadoc plugin, which is triggered by ... something in the pom -->
 
         <!-- DEPENDENCIES -->
-        <guava.version>31.1-jre</guava.version>
-        <jackson.version>2.13.3</jackson.version>
-        <jetty.version>11.0.11</jetty.version>
-        <jackson.databind.version>2.13.3</jackson.databind.version>
-        <jvmbrotli.version>0.2.0</jvmbrotli.version>
-        <logback.version>1.2.11</logback.version>
-        <micrometer.version>1.9.3</micrometer.version>
-        <swagger.ui.version>4.10.3</swagger.ui.version> <!-- used for testing webjars -->
-        <slf4j.version>1.7.36</slf4j.version>
+        <annotations.version>24.0.1</annotations.version>
+        <jetty.version>11.0.15</jetty.version>
+        <jackson.version>2.15.0</jackson.version>
+        <jackson.databind.version>2.15.0</jackson.databind.version>
+        <brotli4j.version>1.11.0</brotli4j.version>
+        <logback.version>1.4.7</logback.version>
+        <slf4j.version>2.0.7</slf4j.version>
+        <gson.version>2.10.1</gson.version>
+        <okhttp.version>4.11.0</okhttp.version>
 
         <!-- TEST DEPENDENCIES -->
         <assertj.version>3.23.1</assertj.version>
-        <gson.version>2.9.1</gson.version>
+        <moshi.version>1.13.0</moshi.version>
         <java.websocket.version>1.5.2</java.websocket.version>
         <junit.version>5.7.2</junit.version>
-        <okhttp.version>4.10.0</okhttp.version>
         <mockito.version>4.6.1</mockito.version>
         <unirest.version>3.13.10</unirest.version>
-        <selenium.chrome.driver.version>4.4.0</selenium.chrome.driver.version>
-        <webdrivermanager.version>5.2.3</webdrivermanager.version>
+        <selenium.chrome.driver.version>4.9.1</selenium.chrome.driver.version>
+        <webdrivermanager.version>5.3.3</webdrivermanager.version>
+        <swagger.ui.version>4.10.3</swagger.ui.version> <!-- used for testing webjars -->
     </properties>
 
     <dependencies>
@@ -137,11 +135,10 @@
                 <artifactId>kotlin-stdlib</artifactId>
                 <version>${kotlin.version}</version>
             </dependency>
-
             <dependency>
-                <groupId>com.google.guava</groupId>
-                <artifactId>guava</artifactId>
-                <version>${guava.version}</version>
+                <groupId>org.jetbrains</groupId>
+                <artifactId>annotations</artifactId>
+                <version>${annotations.version}</version>
             </dependency>
             <!-- Logging -->
             <dependency>
@@ -181,6 +178,11 @@
                 <artifactId>jetty-alpn-conscrypt-server</artifactId>
                 <version>${jetty.version}</version>
             </dependency>
+            <dependency>
+                <groupId>org.eclipse.jetty</groupId>
+                <artifactId>jetty-alpn-java-server</artifactId>
+                <version>${jetty.version}</version>
+            </dependency>
 
             <!-- Jetty WebSocket -->
             <dependency>
@@ -193,12 +195,17 @@
                 <artifactId>websocket-jetty-server</artifactId>
                 <version>${jetty.version}</version>
             </dependency>
+            <dependency>
+                <groupId>org.eclipse.jetty</groupId>
+                <artifactId>jetty-unixdomain-server</artifactId>
+                <version>${jetty.version}</version>
+            </dependency>
 
             <!-- BEGIN Optional dependencies -->
             <dependency>
-                <groupId>com.nixxcode.jvmbrotli</groupId>
-                <artifactId>jvmbrotli</artifactId>
-                <version>${jvmbrotli.version}</version>
+                <groupId>com.aayushatharva.brotli4j</groupId>
+                <artifactId>brotli4j</artifactId>
+                <version>${brotli4j.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.fasterxml.jackson.core</groupId>
@@ -221,81 +228,16 @@
                 <version>${jackson.version}</version>
             </dependency>
             <dependency>
-                <groupId>io.micrometer</groupId>
-                <artifactId>micrometer-core</artifactId>
-                <version>${micrometer.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.webjars</groupId>
-                <artifactId>swagger-ui</artifactId>
-                <version>${swagger.ui.version}</version>
-                <exclusions>
-                    <exclusion>
-                        <groupId>*</groupId>
-                        <artifactId>*</artifactId>
-                    </exclusion>
-                </exclusions>
-            </dependency>
-            <!-- END Optional dependencies -->
-
-            <!-- BEGIN Test dependencies -->
-            <dependency>
-                <groupId>org.junit.jupiter</groupId>
-                <artifactId>junit-jupiter-api</artifactId>
-                <version>${junit.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.assertj</groupId>
-                <artifactId>assertj-core</artifactId>
-                <version>${assertj.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.konghq</groupId>
-                <artifactId>unirest-java</artifactId>
-                <version>${unirest.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.mockito</groupId>
-                <artifactId>mockito-core</artifactId>
-                <version>${mockito.version}</version>
-                <scope>test</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.java-websocket</groupId>
-                <artifactId>Java-WebSocket</artifactId>
-                <version>${java.websocket.version}</version>
+                <groupId>com.google.code.gson</groupId>
+                <artifactId>gson</artifactId>
+                <version>${gson.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.squareup.okhttp3</groupId>
                 <artifactId>okhttp</artifactId>
                 <version>${okhttp.version}</version>
             </dependency>
-            <dependency>
-                <groupId>com.google.code.gson</groupId>
-                <artifactId>gson</artifactId>
-                <version>${gson.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.eclipse.jetty</groupId>
-                <artifactId>jetty-unixsocket</artifactId>
-                <version>${jetty.version}</version>
-                <type>pom</type>
-            </dependency>
-            <dependency>
-                <groupId>org.eclipse.jetty</groupId>
-                <artifactId>jetty-unixsocket-server</artifactId>
-                <version>${jetty.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.seleniumhq.selenium</groupId>
-                <artifactId>selenium-chrome-driver</artifactId>
-                <version>${selenium.chrome.driver.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.github.bonigarcia</groupId>
-                <artifactId>webdrivermanager</artifactId>
-                <version>${webdrivermanager.version}</version>
-            </dependency>
+            <!-- END Optional dependencies -->
         </dependencies>
     </dependencyManagement>
 
@@ -313,7 +255,11 @@
                         <configuration>
                             <sourceDirs>
                                 <sourceDir>${project.basedir}/src/main/java</sourceDir>
+                                <sourceDir>${project.basedir}/src/main/kotlin</sourceDir>
                             </sourceDirs>
+                            <args>
+                                <arg>-Xjvm-default=all</arg>
+                            </args>
                         </configuration>
                     </execution>
                     <execution>
@@ -376,6 +322,19 @@
                 </executions>
             </plugin>
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-gpg-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>sign-artifacts</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>sign</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
                     <rerunFailingTestsCount>2</rerunFailingTestsCount>
@@ -393,9 +352,7 @@
                         <configuration>
                             <rules>
                                 <requireJavaVersion>
-                                    <message>
-                                        Current JDK version ${java.version}: should be ${jdk.version}, or higher!
-                                    </message>
+                                    <message>Current JDK version ${java.version}: should be ${jdk.version}, or higher!</message>
                                     <version>${jdk.version}</version>
                                 </requireJavaVersion>
                             </rules>
@@ -448,6 +405,18 @@
                     </execution>
                 </executions>
             </plugin>
+            <plugin>
+                <artifactId>maven-source-plugin</artifactId>
+                <version>${source.plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                            <goal>jar-no-fork</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
 
         <pluginManagement>
@@ -473,12 +442,20 @@
                     <artifactId>dokka-maven-plugin</artifactId>
                     <version>${dokka.plugin.version}</version>
                     <configuration>
-                        <skip>${dokka.skip}</skip>
                         <jdkVersion>${dokka.jdkVersion}</jdkVersion>
                         <sourceDirectories>
                             <dir>${project.basedir}/src/main/java</dir>
                         </sourceDirectories>
                     </configuration>
+                    <executions>
+                        <execution>
+                            <phase>package</phase>
+                            <id>attach-javadocs-dokka</id>
+                            <goals>
+                                <goal>javadocJar</goal>
+                            </goals>
+                        </execution>
+                    </executions>
                 </plugin>
                 <plugin>
                     <artifactId>maven-surefire-plugin</artifactId>
@@ -490,6 +467,20 @@
                             <version>${junit.version}</version>
                         </dependency>
                     </dependencies>
+                    <configuration>
+                        <!--
+                        default: **/*$*
+                        Source: https://maven.apache.org/surefire/maven-surefire-plugin/test-mojo.html#excludes
+
+                        Not removing this default causes roots tests mixed with nested tests to be not executed by
+                        Maven.
+                        Similar JUnit issue: https://github.com/junit-team/junit5/issues/1377
+                        -->
+                        <excludes>
+                            <exclude />
+                        </excludes>
+          	            <useModulePath>false</useModulePath>
+                    </configuration>
                 </plugin>
                 <plugin>
                     <artifactId>maven-jar-plugin</artifactId>
@@ -526,17 +517,6 @@
                     <version>${shade.plugin.version}</version>
                 </plugin>
                 <plugin>
-                    <artifactId>maven-antrun-plugin</artifactId>
-                    <version>${antrun.plugin.version}</version>
-                </plugin>
-                <plugin>
-                    <artifactId>maven-javadoc-plugin</artifactId>
-                    <version>${javadoc.plugin.version}</version>
-                    <configuration>
-                        <skip>${javadoc.skip}</skip>
-                    </configuration>
-                </plugin>
-                <plugin>
                     <groupId>org.codehaus.mojo</groupId>
                     <artifactId>build-helper-maven-plugin</artifactId>
                     <version>${build-helper.plugin.version}</version>
@@ -556,103 +536,22 @@
 
     <profiles>
         <profile>
-            <id>disable-java8-doclint</id>
-            <activation>
-                <jdk>[1.8,)</jdk>
-            </activation>
+            <id>dev</id>
             <properties>
-                <doclint>none</doclint>
+                <gpg.skip>true</gpg.skip>
+            </properties>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+        </profile>
+        <profile>
+            <id>publish-snapshot</id>
+            <properties>
+                <gpg.skip>true</gpg.skip>
             </properties>
         </profile>
         <profile>
             <id>sonatype-oss-release</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <artifactId>maven-source-plugin</artifactId>
-                        <version>${source.plugin.version}</version>
-                        <executions>
-                            <execution>
-                                <id>attach-sources</id>
-                                <goals>
-                                    <goal>jar-no-fork</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-                    <plugin>
-                        <groupId>org.jetbrains.dokka</groupId>
-                        <artifactId>dokka-maven-plugin</artifactId>
-                        <executions>
-                            <execution>
-                                <phase>package</phase>
-                                <id>attach-javadocs-dokka</id>
-                                <goals>
-                                    <goal>javadocJar</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-                    <plugin>
-                        <artifactId>maven-javadoc-plugin</artifactId>
-                        <version>${javadoc.plugin.version}</version>
-                        <executions>
-                            <execution>
-                                <phase>package</phase>
-                                <id>attach-javadocs-javadoc</id>
-                                <goals>
-                                    <goal>jar</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-        <profile>
-            <id>publish-snapshot</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <artifactId>maven-source-plugin</artifactId>
-                        <version>${source.plugin.version}</version>
-                        <executions>
-                            <execution>
-                                <id>attach-sources</id>
-                                <goals>
-                                    <goal>jar-no-fork</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-                    <plugin>
-                        <groupId>org.jetbrains.dokka</groupId>
-                        <artifactId>dokka-maven-plugin</artifactId>
-                        <executions>
-                            <execution>
-                                <phase>package</phase>
-                                <id>attach-javadocs-dokka</id>
-                                <goals>
-                                    <goal>javadocJar</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-                    <plugin>
-                        <artifactId>maven-javadoc-plugin</artifactId>
-                        <version>${javadoc.plugin.version}</version>
-                        <executions>
-                            <execution>
-                                <phase>package</phase>
-                                <id>attach-javadocs-javadoc</id>
-                                <goals>
-                                    <goal>jar</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-                </plugins>
-            </build>
         </profile>
     </profiles>
 

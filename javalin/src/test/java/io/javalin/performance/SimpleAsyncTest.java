@@ -31,12 +31,12 @@ public class SimpleAsyncTest {
     public void test_async() throws Exception {
 
         QueuedThreadPool threadPool = new QueuedThreadPool(10, 2, 60_000);
-
-        Javalin app = Javalin.create(c -> c.jetty.server(() -> new Server(threadPool))).start(0);
-
+        threadPool.setName("poolname");
+        Javalin app = Javalin.create(c -> c.jetty.threadPool = threadPool).start(0);
+        assertThat(((QueuedThreadPool) app.jettyServer().server().getThreadPool()).getName()).isEqualTo("poolname");
         HttpUtil http = new HttpUtil(app.port());
 
-        app.get("/test-async", ctx -> ctx.future(getFuture()));
+        app.get("/test-async", ctx -> ctx.future(this::getFuture));
         app.get("/test-sync", ctx -> ctx.result(getBlockingResult()));
 
         timeCallable("Async result", () -> {
@@ -54,7 +54,7 @@ public class SimpleAsyncTest {
         app.stop();
     }
 
-    private void timeCallable(String name, Callable callable) throws Exception {
+    private void timeCallable(String name, Callable<?> callable) throws Exception {
         long startTime = System.currentTimeMillis();
         callable.call();
         log.info(name + " took " + (System.currentTimeMillis() - startTime) + " milliseconds");

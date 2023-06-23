@@ -1,48 +1,32 @@
 package io.javalin.javalinvue
 
-import io.github.bonigarcia.wdm.WebDriverManager
 import io.javalin.Javalin
 import io.javalin.apibuilder.ApiBuilder.get
 import io.javalin.http.staticfiles.Location
 import io.javalin.testing.TestUtil
+import io.javalin.testing.WebDriverUtil
 import io.javalin.vue.VueComponent
 import org.assertj.core.api.Assertions
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.jupiter.api.AfterAll
-import org.junit.jupiter.api.Assumptions.assumeTrue
-import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.openqa.selenium.chrome.ChromeDriver
-import org.openqa.selenium.chrome.ChromeOptions
-import java.util.*
 
 class TestJavalinVueBrowser {
 
-    companion object {
-        lateinit var driver: ChromeDriver
+    private lateinit var driver: ChromeDriver
 
-        @BeforeAll
-        @JvmStatic
-        fun setupClass() {
-            assumeTrue(System.getProperty("RunningOnCi") == null)
-            // val os: String = System.getProperty("os.name", "generic").lowercase(Locale.ENGLISH)
-            // assumeTrue("mac" !in os && "darwin" !in os) // comment this out if you're having trouble locally
-            WebDriverManager.chromedriver().setup()
-            driver = ChromeDriver(ChromeOptions().apply {
-                addArguments("--no-sandbox")
-                addArguments("--headless")
-                addArguments("--disable-gpu")
-            })
+    @BeforeEach
+    fun setup() {
+        driver = WebDriverUtil.getDriver()
+    }
+
+    @AfterEach
+    fun teardown() {
+        if (::driver.isInitialized) { // we don't always initialize the driver when running locally
+            driver.quit()
         }
-
-        @AfterAll
-        @JvmStatic
-        fun teardownClass() {
-            if (Companion::driver.isInitialized) {
-                driver.quit()
-            }
-        }
-
     }
 
     @Test
@@ -52,7 +36,7 @@ class TestJavalinVueBrowser {
         app.get("/vue/{my-param}", VueComponent("test-component"))
         driver.get(http.origin + "/vue/odd&co")
         driver.executeScript("let ld = new LoadableData()") // would throw if loadable data was removed by CSP
-        val pathParam = driver.executeScript("""return Vue.prototype.${"$"}javalin.pathParams["my-param"]""") as String
+        val pathParam = driver.executeScript("""return JavalinVue.pathParams["my-param"]""") as String
         assertThat(pathParam).isEqualTo("odd&co")
     }
 
@@ -79,7 +63,7 @@ class TestJavalinVueBrowser {
     fun `path params are not html-encoded on the Vue prototype`() = VueTestUtil.test { app, http ->
         app.get("/vue/{my-param}", VueComponent("test-component"))
         driver.get(http.origin + "/vue/odd&co")
-        val pathParam = driver.executeScript("""return Vue.prototype.${"$"}javalin.pathParams["my-param"]""") as String
+        val pathParam = driver.executeScript("""return JavalinVue.pathParams["my-param"]""") as String
         assertThat(pathParam).isEqualTo("odd&co")
     }
 
@@ -89,7 +73,7 @@ class TestJavalinVueBrowser {
         VueTestUtil.test({ it.vue.stateFunction = { mapOf("some_key" to testValue) } }) { app, http ->
             app.get("/script_in_state", VueComponent("test-component"))
             driver.get(http.origin + "/script_in_state")
-            val stateValue = driver.executeScript("""return Vue.prototype.${"$"}javalin.state["some_key"]""") as String
+            val stateValue = driver.executeScript("""return JavalinVue.state["some_key"]""") as String
             assertThat(stateValue).isEqualTo(testValue)
         }
     }
@@ -100,8 +84,8 @@ class TestJavalinVueBrowser {
         VueTestUtil.test({ it.vue.stateFunction = { mapOf("some_key" to testValue) } }) { app, http ->
             app.get("/script_in_state/{param}", VueComponent("test-component"))
             driver.get(http.origin + "/script_in_state/my_path_param_with_\uD83D\uDE80")
-            val stateValue = driver.executeScript("""return Vue.prototype.${"$"}javalin.state["some_key"]""") as String
-            val pathParam = driver.executeScript("""return Vue.prototype.${"$"}javalin.pathParams["param"]""") as String
+            val stateValue = driver.executeScript("""return JavalinVue.state["some_key"]""") as String
+            val pathParam = driver.executeScript("""return JavalinVue.pathParams["param"]""") as String
             assertThat(stateValue).isEqualTo(testValue)
             assertThat(pathParam).isEqualTo("my_path_param_with_\uD83D\uDE80")
         }
@@ -114,16 +98,15 @@ class TestJavalinVueBrowser {
         VueTestUtil.test({ it.vue.stateFunction = { mapOf("some_key" to testValue) } }) { app, http ->
             app.get("/script_in_state/{param}", VueComponent("test-component"))
             driver.get(http.origin + "/script_in_state/$testValue")
-            val stateValue = driver.executeScript("""return Vue.prototype.${"$"}javalin.state["some_key"]""") as String
-            val pathParam = driver.executeScript("""return Vue.prototype.${"$"}javalin.pathParams["param"]""") as String
+            val stateValue = driver.executeScript("""return JavalinVue.state["some_key"]""") as String
+            val pathParam = driver.executeScript("""return JavalinVue.pathParams["param"]""") as String
             assertThat(stateValue).isEqualTo(testValue)
             assertThat(pathParam).isEqualTo(testValue)
         }
     }
 
     /* LoadableData tests below here */
-
-    fun loadableDataTestApp() = Javalin.create { it.vue.rootDirectory("src/test/resources/vue", Location.EXTERNAL) }.routes {
+    private fun loadableDataTestApp() = Javalin.create { it.vue.rootDirectory("src/test/resources/vue", Location.EXTERNAL) }.routes {
         val users = mutableListOf("John")
         get("/api/users") { it.json(users) }
         get("/api/otherUsers") { it.json(users) }
@@ -139,7 +122,7 @@ class TestJavalinVueBrowser {
         assertThat(driver.checkWindow("ld.loading === false")).isTrue()
         assertThat(driver.checkWindow("ld.loadError === null")).isTrue()
         assertThat(driver.checkWindow("ld.data.length === 1")).isTrue()
-        assertThat(driver.checkWindow("localStorage.length === 1")).isTrue() // cache is true by default
+        assertThat(driver.checkWindow("localStorage.length === 0")).isTrue() // cache is false by default
         driver.createMaryOnBackend()
         driver.executeScript("window.ld.refresh()")
         driver.waitForCondition("ld.loaded")
@@ -154,17 +137,27 @@ class TestJavalinVueBrowser {
     }
 
     @Test
-    fun `LoadableData cache can be disabled`() = TestUtil.test(loadableDataTestApp()) { app, http ->
+    fun `LoadableData cache can be enabled`() = TestUtil.test(loadableDataTestApp()) { app, http ->
         driver.get(http.origin + "/ld")
         driver.executeScript("localStorage.clear()")
-        driver.createLoadableData("ld", "new LoadableData('/api/users', false)")
+        driver.createLoadableData("ld", "new LoadableData('/api/users', {cache: true})")
+        assertThat(driver.checkWindow("localStorage.length === 1")).isTrue()
+    }
+
+    @Test
+    fun `LoadableData cache can be invalidated`() = TestUtil.test(loadableDataTestApp()) { app, http ->
+        driver.get(http.origin + "/ld")
+        driver.executeScript("localStorage.clear()")
+        driver.createLoadableData("ld", "new LoadableData('/api/users', {cache: true})")
+        assertThat(driver.checkWindow("localStorage.length === 1")).isTrue()
+        driver.executeScript("window.ld.invalidateCache()")
         assertThat(driver.checkWindow("localStorage.length === 0")).isTrue()
     }
 
     @Test
     fun `LoadableData errorCallback works`() = TestUtil.test(loadableDataTestApp()) { app, http ->
         driver.get(http.origin + "/ld")
-        driver.createLoadableData("ld", "new LoadableData('/wrong-url', false, () => window.myVar = 'Error')")
+        driver.createLoadableData("ld", "new LoadableData('/wrong-url', {errorCallback: () => window.myVar = 'Error'})")
         assertThat(driver.checkWindow("ld.loadError.code === 404")).isTrue()
         assertThat(driver.checkWindow("myVar === 'Error'")).isTrue()
     }
@@ -175,16 +168,6 @@ class TestJavalinVueBrowser {
         driver.createLoadableData("ld", "new LoadableData('/api/users')")
         driver.createMaryOnBackend()
         driver.executeScript("window.ld.refresh()")
-        driver.waitForCondition("ld.loaded") // refresh sets this to false
-        assertThat(driver.checkWindow("ld.data.length === 2")).isTrue()
-    }
-
-    @Test
-    fun `LoadableData instance can be refreshed through static method`() = TestUtil.test(loadableDataTestApp()) { app, http ->
-        driver.get(http.origin + "/ld")
-        driver.createLoadableData("ld", "new LoadableData('/api/users')")
-        driver.createMaryOnBackend()
-        driver.executeScript("LoadableData.refreshAll('/api/users')")
         driver.waitForCondition("ld.loaded") // refresh sets this to false
         assertThat(driver.checkWindow("ld.data.length === 2")).isTrue()
     }

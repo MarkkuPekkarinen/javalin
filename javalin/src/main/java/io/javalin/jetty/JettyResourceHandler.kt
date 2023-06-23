@@ -6,12 +6,16 @@
 
 package io.javalin.jetty
 
+import io.javalin.config.PrivateConfig
 import io.javalin.http.staticfiles.Location
 import io.javalin.http.staticfiles.StaticFileConfig
 import io.javalin.util.JavalinException
 import io.javalin.util.JavalinLogger
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
+import org.eclipse.jetty.http.MimeTypes
+import org.eclipse.jetty.io.EofException
+import org.eclipse.jetty.server.HttpConnection
 import org.eclipse.jetty.server.Request
 import org.eclipse.jetty.server.Server
 import org.eclipse.jetty.server.handler.ResourceHandler
@@ -22,35 +26,37 @@ import java.io.File
 import java.nio.file.AccessDeniedException
 import io.javalin.http.staticfiles.ResourceHandler as JavalinResourceHandler
 
-class JettyResourceHandler : JavalinResourceHandler {
+class JettyResourceHandler(val pvt: PrivateConfig) : JavalinResourceHandler {
 
-    override fun init(arguments: Map<String, Any>) {
-        handlers = configs.map { ConfigurableHandler(it, arguments["server"] as Server) }
+    fun init() { // we delay the creation of ConfigurableHandler objects to get our logs in order during startup
+        handlers.addAll(lateInitConfigs.map { ConfigurableHandler(it, pvt.server!!) })
     }
 
-    private val configs = mutableListOf<StaticFileConfig>()
-    lateinit var handlers: List<ConfigurableHandler>
+    private val lateInitConfigs = mutableListOf<StaticFileConfig>()
+    private val handlers = mutableListOf<ConfigurableHandler>()
 
-    override fun addStaticFileConfig(config: StaticFileConfig) = configs.add(config)
+    override fun addStaticFileConfig(config: StaticFileConfig): Boolean =
+        if (pvt.server?.isStarted == true) handlers.add(ConfigurableHandler(config, pvt.server!!)) else lateInitConfigs.add(config)
 
     override fun handle(httpRequest: HttpServletRequest, httpResponse: HttpServletResponse): Boolean {
-        val target = httpRequest.getAttribute("jetty-target") as String
-        val baseRequest = httpRequest.getAttribute("jetty-request") as Request
+        val jettyRequest = HttpConnection.getCurrentConnection().httpChannel.request as Request
+        val target = httpRequest.requestURI.removePrefix(httpRequest.contextPath)
         handlers.filter { !it.config.skipFileFunction(httpRequest) }.forEach { handler ->
             try {
                 val resource = handler.getResource(target)
                 if (resource.isFile() || resource.isDirectoryWithWelcomeFile(handler, target)) {
                     handler.config.headers.forEach { httpResponse.setHeader(it.key, it.value) }
-                    if (handler.config.precompress && JettyPrecompressingResourceHandler.handle(resource, httpRequest, httpResponse)) {
-                        return true
+                    if (handler.config.precompress) {
+                        return if (resource.isDirectoryWithWelcomeFile(handler, target))  // if it's a directory, we need to serve the welcome file
+                            JettyPrecompressingResourceHandler.handle(target, getWelcomeFile(handler, target), httpRequest, httpResponse)
+                        else
+                            JettyPrecompressingResourceHandler.handle(target, resource, httpRequest, httpResponse)
                     }
                     httpResponse.contentType = null // Jetty will only set the content-type if it's null
-                    httpResponse.outputStream.use { handler.handle(target, baseRequest, httpRequest, httpResponse) }
-                    httpRequest.setAttribute("handled-as-static-file", true)
-                    return true
+                    return runCatching { handler.handle(target, jettyRequest, httpRequest, httpResponse) }.isSuccess
                 }
             } catch (e: Exception) { // it's fine, we'll just 404
-                if (!JettyUtil.isClientAbortException(e)) {
+                if (e !is EofException) { // EofException is thrown when the client disconnects, which is fine
                     JavalinLogger.info("Exception occurred while handling static resource", e)
                 }
             }
@@ -59,9 +65,12 @@ class JettyResourceHandler : JavalinResourceHandler {
     }
 
     private fun Resource?.isFile() = this != null && this.exists() && !this.isDirectory
+    private fun getWelcomeFile(handler: ResourceHandler, target: String) =
+        handler.getResource("${target.removeSuffix("/")}/index.html")
 
     private fun Resource?.isDirectoryWithWelcomeFile(handler: ResourceHandler, target: String) =
-        this != null && this.isDirectory && handler.getResource("${target.removeSuffix("/")}/index.html")?.exists() == true
+        this != null && this.isDirectory && getWelcomeFile(handler, target)?.exists() == true
+
 }
 
 open class ConfigurableHandler(val config: StaticFileConfig, jettyServer: Server) : ResourceHandler() {
@@ -72,6 +81,10 @@ open class ConfigurableHandler(val config: StaticFileConfig, jettyServer: Server
         isDirAllowed = false
         isEtags = true
         server = jettyServer
+        mimeTypes = MimeTypes()
+        config.mimeTypes.getMapping().forEach { (ext, mimeType) ->
+            mimeTypes.addMimeMapping(ext, mimeType)
+        }
         start()
     }
 
@@ -80,8 +93,10 @@ open class ConfigurableHandler(val config: StaticFileConfig, jettyServer: Server
         return when {
             config.directory == "META-INF/resources/webjars" ->
                 Resource.newClassPathResource("META-INF/resources$path") ?: EmptyResource.INSTANCE
+
             config.aliasCheck != null && aliasResource.isAlias ->
                 if (config.aliasCheck?.check(path, aliasResource) == true) aliasResource else throw AccessDeniedException("Failed alias check")
+
             config.hostedPath == "/" -> super.getResource(path) // same as regular ResourceHandler
             path.startsWith(config.hostedPath + "/") -> super.getResource(path.removePrefix(config.hostedPath))
             else -> EmptyResource.INSTANCE // files that don't start with hostedPath should not be accessible

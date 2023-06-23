@@ -7,8 +7,8 @@
 package io.javalin
 
 import io.javalin.testing.HttpUtil
-import io.javalin.testing.TestLoggingUtil.captureStdOut
 import io.javalin.testing.TestUtil
+import io.javalin.testing.TestUtil.captureStdOut
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import java.io.File
@@ -48,7 +48,7 @@ class TestLogging {
         var loggerCalled = false
         TestUtil.runAndCaptureLogs {
             runTest(Javalin.create {
-                it.requestLoggers.http { _, _ -> loggerCalled = true }
+                it.requestLogger.http { _, _ -> loggerCalled = true }
             })
         }
         assertThat(loggerCalled).isTrue()
@@ -59,7 +59,7 @@ class TestLogging {
         app.get("/async") { ctx ->
             val future = CompletableFuture<String>()
             Executors.newSingleThreadScheduledExecutor().schedule<Boolean>({ future.complete("Hello Async World!") }, 10, TimeUnit.MILLISECONDS)
-            ctx.future(future)
+            ctx.future { future.thenApply { ctx.result(it) } }
         }
         app.start(0)
         assertThat(HttpUtil(app.port()).getBody("/async")).isEqualTo("Hello Async World!")
@@ -71,9 +71,9 @@ class TestLogging {
     fun `resultString is available in request logger and can be read multiple times`() {
         val loggerLog = mutableListOf<String?>()
         val bodyLoggingJavalin = Javalin.create {
-            it.requestLoggers.http { ctx, _ ->
-                loggerLog.add(ctx.resultString())
-                loggerLog.add(ctx.resultString())
+            it.requestLogger.http { ctx, _ ->
+                loggerLog.add(ctx.result())
+                loggerLog.add(ctx.result())
             }
         }
         TestUtil.test(bodyLoggingJavalin) { app, http ->

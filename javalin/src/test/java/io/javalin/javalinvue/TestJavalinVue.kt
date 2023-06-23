@@ -12,8 +12,8 @@ import io.javalin.http.staticfiles.Location
 import io.javalin.vue.VueComponent
 import io.javalin.vue.VueRenderer
 import org.assertj.core.api.Assertions.assertThat
+import org.eclipse.jetty.util.URIUtil
 import org.junit.jupiter.api.Test
-import java.net.URLEncoder
 import java.nio.file.Paths
 
 class TestJavalinVue {
@@ -25,7 +25,7 @@ class TestJavalinVue {
     private val state = State(User("tipsy", "tipsy@tipsy.tipsy"), Role("Maintainer"))
 
     private fun String.uriEncodeForJavascript() =
-        URLEncoder.encode(this, Charsets.UTF_8.name()).replace("+", "%20")
+        URIUtil.encodePath(this)
 
     @Test
     fun `vue component with state`() = VueTestUtil.test({
@@ -37,7 +37,7 @@ class TestJavalinVue {
         assertThat(res).contains(encodedState)
         assertThat(res).contains("""Vue.component("test-component", {template: "#test-component"});""")
         assertThat(res).contains("<body><test-component></test-component></body>")
-        assertThat(res).contains("Vue.prototype.\$javalin")
+        assertThat(res).contains("window.JavalinVue")
     }
 
     @Test
@@ -47,7 +47,7 @@ class TestJavalinVue {
         val res = http.getBody("/no-state")
         assertThat(res).contains(encodedEmptyState)
         assertThat(res).contains("<body><test-component></test-component></body>")
-        assertThat(res).contains("Vue.prototype.\$javalin")
+        assertThat(res).contains("window.JavalinVue")
     }
 
     @Test
@@ -61,7 +61,7 @@ class TestJavalinVue {
         val res = http.getBody("/no-state")
         assertThat(res).contains(encodedEmptyState)
         assertThat(res).contains("<body><test-component></test-component></body>")
-        assertThat(res).contains("Vue.prototype.\$javalin")
+        assertThat(res).contains("window.JavalinVue")
         assertThat(res).contains("PRE_RENDER")
         assertThat(res).doesNotContain("POST_RENDER")
     }
@@ -77,7 +77,7 @@ class TestJavalinVue {
         val res = http.getBody("/no-state")
         assertThat(res).contains(encodedEmptyState)
         assertThat(res).contains("<body><test-component></test-component></body>")
-        assertThat(res).contains("Vue.prototype.\$javalin")
+        assertThat(res).contains("window.JavalinVue")
         assertThat(res).doesNotContain("PRE_RENDER")
         assertThat(res).contains("POST_RENDER")
     }
@@ -89,7 +89,7 @@ class TestJavalinVue {
         val res = http.getBody("/no-state")
         assertThat(res).contains(encodedEmptyState)
         assertThat(res).contains("<body><test-component></test-component></body>")
-        assertThat(res).contains("Vue.prototype.\$javalin")
+        assertThat(res).contains("window.JavalinVue")
         assertThat(res).doesNotContain("PRE_RENDER")
         assertThat(res).doesNotContain("POST_RENDER")
     }
@@ -109,7 +109,7 @@ class TestJavalinVue {
         val res = http.getBody("/no-state")
         assertThat(res).contains(encodedEmptyState)
         assertThat(res).contains("<body><test-component></test-component></body>")
-        assertThat(res).contains("Vue.prototype.\$javalin")
+        assertThat(res).contains("window.JavalinVue")
         assertThat(res).contains("POST_RENDER")
         assertThat(res).contains("PRE_RENDER")
     }
@@ -123,7 +123,7 @@ class TestJavalinVue {
         val res = http.getBody("/no-state")
         assertThat(res).contains(encodedEmptyState)
         assertThat(res).contains("<body><test-component-3></test-component-3></body>")
-        assertThat(res).contains("app.config.globalProperties.\$javalin")
+        assertThat(res).contains("window.JavalinVue")
     }
 
 
@@ -138,7 +138,7 @@ class TestJavalinVue {
         assertThat(res).contains(encodedState)
         assertThat(res).contains("""app.component("test-component-3", {template: "#test-component-3"});""")
         assertThat(res).contains("<body><test-component-3></test-component-3></body>")
-        assertThat(res).contains("app.config.globalProperties.\$javalin")
+        assertThat(res).contains("window.JavalinVue")
     }
 
     @Test
@@ -168,7 +168,7 @@ class TestJavalinVue {
 
     @Test
     fun `state is escaped`() = VueTestUtil.test { app, http ->
-        val encodedXSS = "%3Cscript%3Ealert%281%29%3Cscript%3E"
+        val encodedXSS = "%3Cscript%3Ealert(1)%3Cscript%3E"
         app.get("/escaped", VueComponent("test-component", mapOf("xss" to "<script>alert(1)<script>")))
         assertThat(http.getBody("/escaped")).doesNotContain("<script>alert(1)<script>")
         assertThat(http.getBody("/escaped")).contains(encodedXSS)
@@ -222,7 +222,7 @@ class TestJavalinVue {
     @Test
     fun `@cdnWebjar resolves to webjar on localhost`() = VueTestUtil.test({
         it.vue.rootDirectory("src/test/resources/vue", Location.EXTERNAL)
-        it.core.contextResolver.url = { "http://localhost:1234/" }
+        it.contextResolver.url = { "http://localhost:1234/" }
     }) { app, http ->
         app.get("/path", VueComponent("test-component"))
         assertThat(http.getBody("/path")).contains("""src="/webjars/""")
@@ -231,7 +231,7 @@ class TestJavalinVue {
     @Test
     fun `@cdnWebjar resolves to cdn on non-localhost`() = VueTestUtil.test({
         it.vue.rootDirectory("src/test/resources/vue", Location.EXTERNAL)
-        it.core.contextResolver.url = { "https://example.com" }
+        it.contextResolver.url = { "https://example.com" }
     }) { app, http ->
         app.get("/path", VueComponent("test-component"))
         assertThat(http.getBody("/path")).contains("""src="https://cdn.jsdelivr.net/webjars/""")
@@ -240,7 +240,7 @@ class TestJavalinVue {
     @Test
     fun `@cdnWebjar resolves to https even on non https hosts`() = VueTestUtil.test({
         it.vue.rootDirectory("src/test/resources/vue", Location.EXTERNAL)
-        it.core.contextResolver.url = { "http://123.123.123.123:1234/" }
+        it.contextResolver.url = { "http://123.123.123.123:1234/" }
     }) { app, http ->
         app.get("/path", VueComponent("test-component"))
         assertThat(http.getBody("/path")).contains("""src="https://cdn.jsdelivr.net/webjars/""")
@@ -249,7 +249,7 @@ class TestJavalinVue {
     @Test
     fun `@inlineFile functionality works as expected if not-dev`() = VueTestUtil.test({
         it.vue.rootDirectory("src/test/resources/vue", Location.EXTERNAL)
-        it.core.contextResolver.url = { "http://123.123.123.123:1234/" }
+        it.contextResolver.url = { "http://123.123.123.123:1234/" }
     }) { app, http ->
         app.get("/path", VueComponent("test-component"))
         val responseBody = http.getBody("/path")
@@ -263,7 +263,7 @@ class TestJavalinVue {
     @Test
     fun `@inlineFile functionality works as expected if dev`() = VueTestUtil.test({
         it.vue.rootDirectory("src/test/resources/vue", Location.EXTERNAL)
-        it.core.contextResolver.url = { "http://localhost:1234/" }
+        it.contextResolver.url = { "http://localhost:1234/" }
     }) { app, http ->
         app.get("/path", VueComponent("test-component"))
         val responseBody = http.getBody("/path")

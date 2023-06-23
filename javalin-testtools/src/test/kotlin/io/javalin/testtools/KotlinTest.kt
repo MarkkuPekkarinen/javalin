@@ -36,8 +36,8 @@ class KotlinTest {
             val response = "${it.queryParam("from")} ${it.header(Header.FROM)}"
             it.result(response)
         }
-        val response = client.get("/hello?from=From") { it.header(Header.FROM, "Russia With Love") }
-        assertThat(response.body?.string()).isEqualTo("From Russia With Love")
+        val response = client.get("/hello?from=From") { it.header(Header.FROM, "Paris to Berlin") }
+        assertThat(response.body?.string()).isEqualTo("From Paris to Berlin")
     }
 
     @Test
@@ -170,6 +170,21 @@ class KotlinTest {
         }
 
         assertThat(app.attribute("testlogs") as String).contains("Error in handler code")
+    }
+
+    private fun throwingTest(app: Javalin) {
+        JavalinTest.test(app) { _, _ ->
+            assertThat(false).isTrue()
+        }
+    }
+
+    @Test
+    fun `errors should contain valid stacktrace of origin exception`() {
+        val app = Javalin.create()
+        val exception = assertThrows<AssertionError> {
+            throwingTest(app)
+        }
+        assertThat(exception.stackTrace.any { it.toString().contains("io.javalin.testtools.KotlinTest.throwingTest") }).isTrue
     }
 
 }

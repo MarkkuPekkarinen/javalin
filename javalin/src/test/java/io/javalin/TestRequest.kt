@@ -7,11 +7,11 @@
 package io.javalin
 
 import io.javalin.http.Header
-import io.javalin.http.SESSION_CACHE_KEY_PREFIX
 import io.javalin.http.HttpStatus.INTERNAL_SERVER_ERROR
 import io.javalin.http.formParamAsClass
 import io.javalin.http.headerAsClass
 import io.javalin.http.queryParamAsClass
+import io.javalin.http.servlet.SESSION_CACHE_KEY_PREFIX
 import io.javalin.http.staticfiles.Location
 import io.javalin.plugin.bundled.BasicAuthPlugin
 import io.javalin.testing.TestUtil
@@ -110,6 +110,20 @@ class TestRequest {
         http.get("/assert-notsetness").let { assertThat(it.body).isEqualTo("Computed: null") }
         http.get("/compute-attribute").let { assertThat(it.body).isEqualTo("Computed: Hello") }
         http.get("/cant-recompute-it").let { assertThat(it.body).isEqualTo("Computed: Hello") }
+    }
+
+    @Test
+    fun `attributes can be computed`() = TestUtil.test { app, http ->
+        val key = "set";
+        app.get("/") { ctx ->
+            val data = listOf(
+                ctx.attribute(key) ?: "NOT_SET",
+                ctx.attributeOrCompute(key) { "SET" },
+                ctx.attribute(key) ?: "NOT_SET",
+            )
+            ctx.result(data.joinToString("|"))
+        }
+        assertThat(http.getBody("/")).isEqualTo("NOT_SET|SET|SET")
     }
 
     @Test

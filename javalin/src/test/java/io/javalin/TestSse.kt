@@ -47,19 +47,17 @@ class TestSse {
     }
 
     @Test
-    fun `sending events to multiple clients works`() {
-        TestUtil.test { app, http ->
-            val eventSources: MutableList<SseClient> = ArrayList()
-            app.sse("/sse") {
-                eventSources.add(it)
-                it.sendEvent(event, data + eventSources.size)
-                it.close()
-            }
-            val bodyClient1 = http.sse("/sse").get().body
-            val bodyClient2 = http.sse("/sse").get().body
-            assertThat(bodyClient1).isNotEqualTo(bodyClient2)
-            assertThat(eventSources[0]).isNotEqualTo(eventSources[1])
+    fun `sending events to multiple clients works`() = TestUtil.test { app, http ->
+        val eventSources: MutableList<SseClient> = ArrayList()
+        app.sse("/sse") {
+            eventSources.add(it)
+            it.sendEvent(event, data + eventSources.size)
+            it.close()
         }
+        val bodyClient1 = http.sse("/sse").get().body
+        val bodyClient2 = http.sse("/sse").get().body
+        assertThat(bodyClient1).isNotEqualTo(bodyClient2)
+        assertThat(eventSources[0]).isNotEqualTo(eventSources[1])
     }
 
     @Test
@@ -73,6 +71,17 @@ class TestSse {
     }
 
     @Test
+    fun `can check if SseClient has been terminated`() = TestUtil.test { app, http ->
+        var terminated = false
+        app.sse("/sse") {
+            it.close()
+            terminated = it.terminated()
+        }
+        http.sse("/sse").get().body
+        assertThat(terminated).isTrue()
+    }
+
+    @Test
     fun `default http status is 200`() = TestUtil.test { app, http ->
         app.sse("/sse") { it.doAndClose { it.sendEvent(event, data) } }
         val status = http.sse("/sse").get().httpCode()
@@ -81,7 +90,7 @@ class TestSse {
 
     @Test
     fun `getting queryParam in sse handler works`() = TestUtil.test { app, http ->
-        app.sse("/sse") { it.doAndClose { it.sendEvent(event, it.ctx.queryParam("qp")!!) } }
+        app.sse("/sse") { it.doAndClose { it.sendEvent(event, it.ctx().queryParam("qp")!!) } }
         val body = http.sse("/sse?qp=my-qp").get().body
         assertThat(body).contains("event: $event")
         assertThat(body).contains("data: " + "my-qp")
@@ -109,10 +118,17 @@ class TestSse {
     }
 
     @Test
+    fun `sending multi line data works`() = TestUtil.test { app, http ->
+        app.sse("/sse") { it.doAndClose { it.sendEvent("a\nb") } }
+        val body = http.sse("/sse").get().body
+        assertThat(body).isEqualTo("event: message\ndata: a\ndata: b\n\n")
+    }
+
+    @Test
     fun `sending async data is properly processed`() = TestUtil.test { app, http ->
         app.sse("/sse") {
             it.sendEvent("Sync event")
-            it.ctx.async {
+            it.ctx().async {
                 Thread.sleep(100)
                 it.sendEvent("Async event")
             }

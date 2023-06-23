@@ -8,8 +8,8 @@
 package io.javalin.staticfiles
 
 import io.javalin.Javalin
-import io.javalin.http.Header
 import io.javalin.http.ContentType
+import io.javalin.http.Header
 import io.javalin.http.HttpStatus.NOT_FOUND
 import io.javalin.http.HttpStatus.OK
 import io.javalin.http.HttpStatus.UNAUTHORIZED
@@ -73,7 +73,7 @@ class TestStaticFiles {
                 }
             }
             it.staticFiles.add("/public", Location.CLASSPATH)
-            it.jetty.contextHandlerConfig { handler ->
+            it.jetty.modifyServletContextHandler() { handler ->
                 handler.addFilter(FilterHolder(filter), "/*", EnumSet.allOf(DispatcherType::class.java))
             }
         }
@@ -145,6 +145,13 @@ class TestStaticFiles {
         assertThat(http.get("/script.js").httpCode()).isEqualTo(OK)
         assertThat(http.get("/script.js").headers.getFirst(Header.CONTENT_TYPE)).contains(ContentType.JAVASCRIPT)
         assertThat(http.getBody("/script.js")).contains("JavaScript works")
+    }
+
+    @Test
+    fun `serving mjs from classpath works`() = TestUtil.test(defaultStaticResourceApp) { _, http ->
+        assertThat(http.get("/module.mjs").httpCode()).isEqualTo(OK)
+        assertThat(http.get("/module.mjs").headers.getFirst(Header.CONTENT_TYPE)).contains(ContentType.JAVASCRIPT)
+        assertThat(http.getBody("/module.mjs")).contains("export function test()").contains("mjs works")
     }
 
     @Test
@@ -298,4 +305,58 @@ class TestStaticFiles {
         assertThat(multiLocationStaticResourceApp.attribute<String>("testlogs").split("Static file handler added").size - 1).isEqualTo(4)
     }
 
+    @Test
+    fun `static files can be added after app creation`() = TestUtil.test(
+        Javalin.create().updateConfig { it.staticFiles.add("/public", Location.CLASSPATH) }
+    ) { _, http ->
+        assertThat(http.get("/html.html").httpCode()).isEqualTo(OK)
+        assertThat(http.get("/html.html").headers.getFirst(Header.CONTENT_TYPE)).contains(ContentType.HTML)
+        assertThat(http.getBody("/html.html")).contains("HTML works")
+    }
+
+    @Test
+    fun `static files can be added after app start with previous static files`() = TestUtil.test(
+        Javalin.create().updateConfig { it.staticFiles.add("/public", Location.CLASSPATH) }
+    ) { app, http ->
+        app.updateConfig {
+            it.staticFiles.add { staticFiles ->
+                staticFiles.hostedPath = "/url-prefix"
+                staticFiles.directory = "/public"
+                staticFiles.location = Location.CLASSPATH
+            }
+        }
+        assertThat(http.get("/html.html").httpCode()).isEqualTo(OK)
+        assertThat(http.get("/html.html").headers.getFirst(Header.CONTENT_TYPE)).contains(ContentType.HTML)
+        assertThat(http.getBody("/html.html")).contains("HTML works")
+
+        assertThat(http.get("/url-prefix/html.html").httpCode()).isEqualTo(OK)
+        assertThat(http.get("/url-prefix/html.html").headers.getFirst(Header.CONTENT_TYPE)).contains(ContentType.HTML)
+        assertThat(http.getBody("/url-prefix/html.html")).contains("HTML works")
+    }
+
+    @Test
+    fun `static files can be added after app start without previous static files`() = TestUtil.test(
+        Javalin.create()
+    ) { app, http ->
+        app.updateConfig {
+            it.staticFiles.add("/public", Location.CLASSPATH)
+        }
+
+        assertThat(http.get("/html.html").httpCode()).isEqualTo(OK)
+        assertThat(http.get("/html.html").headers.getFirst(Header.CONTENT_TYPE)).contains(ContentType.HTML)
+        assertThat(http.getBody("/html.html")).contains("HTML works")
+    }
+
+    @Test
+    fun `can add custom mimetype mappings`() = TestUtil.test(Javalin.create { config ->
+        config.staticFiles.add {
+            it.directory = "/public"
+            it.location = Location.CLASSPATH
+            it.mimeTypes.add("application/x-javalin", "javalin")
+        }
+    }) { _, http ->
+        assertThat(http.get("/file.javalin").httpCode()).isEqualTo(OK)
+        assertThat(http.get("/file.javalin").headers.getFirst(Header.CONTENT_TYPE)).contains("application/x-javalin")
+        assertThat(http.getBody("/file.javalin")).contains("TESTFILE.javalin")
+    }
 }

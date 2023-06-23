@@ -7,19 +7,12 @@
 
 package io.javalin
 
-import io.javalin.http.HttpStatus
-import io.javalin.http.HttpStatus.IM_A_TEAPOT
-import io.javalin.util.LoomUtil
 import io.javalin.http.HttpStatus.NOT_FOUND
 import io.javalin.testing.TestServlet
 import io.javalin.testing.TestUtil
 import io.javalin.testing.httpCode
+import io.javalin.util.LoomUtil
 import jakarta.servlet.DispatcherType
-import jakarta.servlet.Filter
-import jakarta.servlet.FilterChain
-import jakarta.servlet.FilterConfig
-import jakarta.servlet.ServletRequest
-import jakarta.servlet.ServletResponse
 import jakarta.servlet.http.HttpServlet
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
@@ -73,7 +66,7 @@ class TestCustomJetty {
     fun `embedded server can have custom jetty Handler`() = TestUtil.runLogLess {
         val statisticsHandler = StatisticsHandler()
         val newServer = Server().apply { handler = statisticsHandler }
-        val app = Javalin.create { it.jetty.server { newServer } }.get("/") { it.result("Hello World") }.start(0)
+        val app = Javalin.create { it.pvt.server =  newServer }.get("/") { it.result("Hello World") }.start(0)
         val requests = 5
         for (i in 0 until requests) {
             assertThat(Unirest.get("http://localhost:" + app.port() + "/").asString().body).isEqualTo("Hello World")
@@ -91,7 +84,7 @@ class TestCustomJetty {
         val requestLogHandler = RequestLogHandler().apply { requestLog = RequestLog { _, _ -> logCount.incrementAndGet() } }
         val handlerChain = StatisticsHandler().apply { handler = requestLogHandler }
         val newServer = Server().apply { handler = handlerChain }
-        val app = Javalin.create { it.jetty.server { newServer } }.get("/") { it.result("Hello World") }.start(0)
+        val app = Javalin.create { it.pvt.server = newServer }.get("/") { it.result("Hello World") }.start(0)
         val requests = 10
         for (i in 0 until requests) {
             assertThat(Unirest.get("http://localhost:" + app.port() + "/").asString().body).isEqualTo("Hello World")
@@ -109,7 +102,7 @@ class TestCustomJetty {
         val handlerCollection = HandlerCollection()
         val handlerChain = StatisticsHandler().apply { handler = handlerCollection }
         val newServer = Server().apply { handler = handlerChain }
-        val app = Javalin.create { it.jetty.server { newServer } }.get("/") { it.result("Hello World") }.start(0)
+        val app = Javalin.create { it.pvt.server = newServer }.get("/") { it.result("Hello World") }.start(0)
         val requests = 10
         for (i in 0 until requests) {
             assertThat(Unirest.get("http://localhost:" + app.port() + "/").asString().body).isEqualTo("Hello World")
@@ -133,8 +126,8 @@ class TestCustomJetty {
             }
         }
         val javalin = Javalin.create {
-            it.jetty.sessionHandler { fileSessionHandler }
-            it.jetty.server { newServer }
+            it.jetty.modifyServletContextHandler { it.sessionHandler = fileSessionHandler }
+            it.pvt.server = newServer
         }.start(0)
         val httpHandler = (newServer.handlers[0] as ServletContextHandler)
         assertThat(httpHandler.sessionHandler).isEqualTo(fileSessionHandler)
@@ -160,7 +153,7 @@ class TestCustomJetty {
         }
         newServer.handler = handler
 
-        val javalin = Javalin.create { it.jetty.server { newServer } }
+        val javalin = Javalin.create { it.pvt.server = newServer }
         TestUtil.test(javalin) { app, http ->
             app.get("/bar") { it.result("Hello") }
             assertThat(http.getBody("/foo/foo")).isEqualTo("yo dude")
@@ -180,7 +173,7 @@ class TestCustomJetty {
             }
         }
         val javalin = Javalin.create {
-            it.jetty.server { newServer }
+            it.pvt.server = newServer
             it.routing.contextPath = "/api"
         }
         TestUtil.test(javalin) { app, http ->
@@ -194,22 +187,30 @@ class TestCustomJetty {
     fun `default server uses loom if available`() {
         if (!LoomUtil.loomAvailable) return
         val defaultApp = Javalin.create()
-        TestUtil.test(defaultApp) { app, http -> } // start and stop default server
-        assertThat(defaultApp.attribute<String>("testlogs")).contains("Loom is available, using Virtual ThreadPool... Neat!")
+        TestUtil.test(defaultApp) { app, http ->
+            val isVirtual = Thread::class.java.getMethod("isVirtual")
+            app.get("/") {
+                val thread = Thread.currentThread()
+                it.result("isVirtual:${isVirtual.invoke(thread)}|name:${thread.name}")
+            }
+            val responseBody = http.get("/").body
+            assertThat(responseBody).contains("isVirtual:true")
+            assertThat(responseBody).contains("JettyServerThreadPool-Virtual")
+        }
+        assertThat(LoomUtil.isLoomThreadPool(defaultApp.jettyServer.server().threadPool)).isTrue
+        assertThat(defaultApp.attribute<String>("testlogs")).contains("JDK supports Loom")
     }
 
     @Test
     fun `custom connector works`() {
         val port = (2000..9999).random()
         val app = Javalin.create { config ->
-            config.jetty.server {
-                Server().apply {
-                    val httpConfiguration = HttpConfiguration()
-                    httpConfiguration.addCustomizer(ForwardedRequestCustomizer())
-                    val connector = ServerConnector(this, HttpConnectionFactory(httpConfiguration))
-                    connector.port = port
-                    this.addConnector(connector)
-                }
+            config.jetty.addConnector { server, _ ->
+                val httpConfiguration = HttpConfiguration()
+                httpConfiguration.addCustomizer(ForwardedRequestCustomizer())
+                val connector = ServerConnector(server, HttpConnectionFactory(httpConfiguration))
+                connector.port = port
+                connector
             }
         }
         TestUtil.test(app) { server, _ ->
@@ -221,21 +222,20 @@ class TestCustomJetty {
     @Test
     fun `can add filter to stop request before javalin`() {
         val filterJavalin = Javalin.create {
-            it.jetty.contextHandlerConfig { handler ->
-                handler.addFilter(FilterHolder(object : Filter {
-                    override fun init(config: FilterConfig?) {}
-                    override fun destroy() {}
-                    override fun doFilter(request: ServletRequest, response: ServletResponse, chain: FilterChain) {
-                        (response as HttpServletResponse).status = IM_A_TEAPOT.code
+            it.jetty.modifyServletContextHandler { handler ->
+                handler.addFilter(FilterHolder { req, res, chain ->
+                    if ((req as HttpServletRequest).requestURI != "/allowed") {
+                        res.writer.write("Not allowed")
+                    } else {
+                        chain.doFilter(req, res)
                     }
-                }), "/*", EnumSet.allOf(DispatcherType::class.java))
+                }, "/*", EnumSet.allOf(DispatcherType::class.java))
             }
-        }
+        }.get("/allowed") { it.result("Allowed!") }
         TestUtil.test(filterJavalin) { _, http ->
-            assertThat(http.get("/test").httpCode()).isEqualTo(IM_A_TEAPOT)
-            assertThat(http.get("/test").body).isNotEqualTo("Test")
+            assertThat(http.get("/allowed").body).isEqualTo("Allowed!")
+            assertThat(http.get("/anything-else").body).isEqualTo("Not allowed")
         }
     }
 
 }
-

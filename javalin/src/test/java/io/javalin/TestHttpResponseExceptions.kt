@@ -6,16 +6,16 @@
 
 package io.javalin
 
-import io.javalin.http.Header
 import io.javalin.http.BadRequestResponse
 import io.javalin.http.ContentType
 import io.javalin.http.ForbiddenResponse
+import io.javalin.http.Header
 import io.javalin.http.HttpResponseException
-import io.javalin.http.UnauthorizedResponse
 import io.javalin.http.HttpStatus.BAD_REQUEST
 import io.javalin.http.HttpStatus.FORBIDDEN
 import io.javalin.http.HttpStatus.IM_A_TEAPOT
 import io.javalin.http.HttpStatus.UNAUTHORIZED
+import io.javalin.http.UnauthorizedResponse
 import io.javalin.testing.TestUtil
 import io.javalin.testing.httpCode
 import org.assertj.core.api.Assertions.assertThat
@@ -41,12 +41,12 @@ class TestHttpResponseExceptions {
     }
 
     @Test
-    fun `response is formatted as text if client wants text`() = TestUtil.test { app, http ->
-        app.post("/") { throw ForbiddenResponse() }
+    fun `response is formatted as text if client wants html or text`() = TestUtil.test { app, http ->
+        app.post("/") { throw ForbiddenResponse("Forbidden", mapOf("a" to "A", "b" to "B")) }
         val response = http.post("/").header(Header.ACCEPT, ContentType.PLAIN).asString()
         assertThat(response.headers.getFirst(Header.CONTENT_TYPE)).isEqualTo(ContentType.PLAIN)
         assertThat(response.httpCode()).isEqualTo(FORBIDDEN)
-        assertThat(response.body).isEqualTo("Forbidden")
+        assertThat(response.body).isEqualTo("Forbidden\n\na:\nA\nb:\nB\n")
     }
 
     @Test
@@ -131,7 +131,7 @@ class TestHttpResponseExceptions {
             }, 0, TimeUnit.MILLISECONDS)
             return future
         }
-        app.get("/completed-future-route") { it.future(getExceptionallyCompletingFuture()) }
+        app.get("/completed-future-route") { it.future { getExceptionallyCompletingFuture() } }
         assertThat(http.get("/completed-future-route").body).isEqualTo("Unauthorized")
         assertThat(http.get("/completed-future-route").httpCode()).isEqualTo(UNAUTHORIZED)
     }
@@ -144,7 +144,7 @@ class TestHttpResponseExceptions {
             }
             "Result"
         }
-        app.get("/throwing-future-route") { it.future(getThrowingFuture()) }
+        app.get("/throwing-future-route") { it.future { getThrowingFuture() } }
         assertThat(http.get("/throwing-future-route").body).isEqualTo("Unauthorized")
         assertThat(http.get("/throwing-future-route").httpCode()).isEqualTo(UNAUTHORIZED)
     }
@@ -158,7 +158,7 @@ class TestHttpResponseExceptions {
             }, 0, TimeUnit.MILLISECONDS)
             return future
         }
-        app.get("/completed-future-route") { it.future(getUnexpectedExceptionallyCompletingFuture()) }
+        app.get("/completed-future-route") { it.future { getUnexpectedExceptionallyCompletingFuture() } }
         app.exception(IllegalStateException::class.java) { exception, ctx -> ctx.result(exception.message!!) }
         assertThat(http.get("/completed-future-route").body).isEqualTo("Unexpected message")
     }

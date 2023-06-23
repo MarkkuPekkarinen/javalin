@@ -9,6 +9,7 @@ package io.javalin
 import io.javalin.apibuilder.ApiBuilder.ws
 import io.javalin.http.Header
 import io.javalin.http.UnauthorizedResponse
+import io.javalin.json.toJsonString
 import io.javalin.testing.SerializableObject
 import io.javalin.testing.TestUtil
 import io.javalin.testing.TypedException
@@ -54,7 +55,7 @@ class TestWebSocket {
     fun contextPathJavalin(): Javalin = Javalin.create { it.routing.contextPath = "/websocket" }
 
     fun accessManagedJavalin(): Javalin = Javalin.create().apply {
-        this.cfg.core.accessManager { handler, ctx, roles ->
+        this.cfg.accessManager { handler, ctx, roles ->
             this.logger().log.add("handling upgrade request ...")
             when {
                 ctx.queryParam("exception") == "true" -> throw UnauthorizedResponse()
@@ -62,6 +63,7 @@ class TestWebSocket {
                     this.logger().log.add("upgrade request valid!")
                     handler.handle(ctx)
                 }
+
                 else -> this.logger().log.add("upgrade request invalid!")
             }
         }
@@ -73,13 +75,13 @@ class TestWebSocket {
     @Test
     fun `each connection receives a unique id`() = TestUtil.test(contextPathJavalin()) { app, _ ->
         app.ws("/test-websocket-1") { ws ->
-            ws.onConnect { ctx -> app.logger().log.add(ctx.sessionId) }
-            ws.onClose { ctx -> app.logger().log.add(ctx.sessionId) }
+            ws.onConnect { ctx -> app.logger().log.add(ctx.sessionId()) }
+            ws.onClose { ctx -> app.logger().log.add(ctx.sessionId()) }
         }
         app.routes {
             ws("/test-websocket-2") { ws ->
-                ws.onConnect { ctx -> app.logger().log.add(ctx.sessionId) }
-                ws.onClose { ctx -> app.logger().log.add(ctx.sessionId) }
+                ws.onConnect { ctx -> app.logger().log.add(ctx.sessionId()) }
+                ws.onClose { ctx -> app.logger().log.add(ctx.sessionId()) }
             }
         }
         TestClient(app, "/websocket/test-websocket-1").connectAndDisconnect()
@@ -140,7 +142,7 @@ class TestWebSocket {
 
     @Test
     fun `receive and send json messages`() = TestUtil.test(Javalin.create {
-        it.core.jsonMapper(fasterJacksonMapper)
+        it.jsonMapper(fasterJacksonMapper)
     }) { app, _ ->
         app.ws("/message") { ws ->
             ws.onMessage { ctx ->
@@ -282,7 +284,7 @@ class TestWebSocket {
 
     @Test
     fun `web socket logging works`() = TestUtil.test(Javalin.create().apply {
-        this.cfg.requestLoggers.webSocket { ws ->
+        this.cfg.requestLogger.ws { ws ->
             ws.onConnect { ctx -> this.logger().log.add(ctx.pathParam("param") + " connected") }
             ws.onClose { ctx -> this.logger().log.add(ctx.pathParam("param") + " disconnected") }
         }
@@ -324,7 +326,7 @@ class TestWebSocket {
         val maxTextSize = 1L
         val textToSend = "This text is far too long."
         val app = Javalin.create {
-            it.jetty.wsFactoryConfig { wsFactory ->
+            it.jetty.modifyJettyWebSocketServletFactory { wsFactory ->
                 wsFactory.maxTextMessageSize = maxTextSize
             }
         }.ws("/ws") { ws ->
@@ -401,6 +403,24 @@ class TestWebSocket {
         TestClient(app, "/ws").connectAndDisconnect()
         assertThat(app.logger().log).contains("Unauthorized")
         assertThat(app.logger().log).doesNotContain("This should not be added")
+    }
+
+    @Test
+    fun `throw in wsAfter is covered by wsException`() = TestUtil.test { app, _ ->
+        app.wsAfter { it.onConnect { throw UnauthorizedResponse() } }
+        app.ws("/ws") { it.onConnect { app.logger().log.add("This should be added") } }
+        app.wsException(Exception::class.java) { e, _ -> app.logger().log.add(e.message!!) }
+        TestClient(app, "/ws").connectAndDisconnect()
+        assertThat(app.logger().log).contains("Unauthorized")
+        assertThat(app.logger().log).contains("This should be added")
+    }
+
+    @Test
+    fun `wsAfter works for onConnect`() = TestUtil.test { app, _ ->
+        app.wsAfter { it.onConnect { app.logger().log.add("After!") } }
+        app.ws("/ws") { it.onConnect { app.logger().log.add("Endpoint!") } }
+        TestClient(app, "/ws").connectAndDisconnect()
+        assertThat(app.logger().log).containsExactly("Endpoint!", "After!")
     }
 
     @Test
@@ -520,37 +540,41 @@ class TestWebSocket {
         }
     }
 
+    private fun pingingApp() = Javalin.create().apply {
+        this.ws("/ws") { ws ->
+            ws.onConnect { it.enableAutomaticPings(5, TimeUnit.MILLISECONDS, ByteBuffer.wrap(byteArrayOf(0, 0, 0))) }
+            ws.onMessage {
+                it.disableAutomaticPings()
+                this.logger().log.clear()
+            }
+        }
+    }
+
+    private fun loggingClient(app: Javalin) = TestClient(app, "/ws", emptyMap(), {}, null, { frame: Framedata? ->
+        app.logger().log.add(frame!!.payloadData.get(2).toString())
+    }, null)
+
     @Test
-    @Timeout(value = 3, unit = TimeUnit.SECONDS)
-    fun `websocket enableAutomaticPings() works`() = TestUtil.test { app, _ ->
-        app.wsBefore("/ws") {
-            it.onConnect { ctx ->
-                ctx.enableAutomaticPings(5, TimeUnit.MILLISECONDS, ByteBuffer.wrap(byteArrayOf(0, 0, 0)))
-            }
-        }
-        app.ws("/ws") { ws ->
-            ws.onMessage { ctx ->
-                when (ctx.message()) {
-                    "ENABLE_PINGS" -> ctx.enableAutomaticPings(5, TimeUnit.MILLISECONDS, ByteBuffer.wrap(byteArrayOf(1, 1, 1)))
-                    "DISABLE_PINGS" -> ctx.disableAutomaticPings()
-                }
-            }
-        }
-        val client = TestClient(app, "/ws", emptyMap(), {}, null, { frame: Framedata? ->
-            app.logger().log.add(frame!!.payloadData.get(2).toString())
-        }, null)
-        val pingsToWaitFor = (2..4).shuffled()[0] // randomization is good, wait for 2-4 pings
+    @Timeout(value = 2, unit = TimeUnit.SECONDS)
+    fun `websocket enableAutomaticPings() works`() = TestUtil.test(pingingApp()) { app, _ ->
+        val client = loggingClient(app)
         client.connectBlocking()
-        doBlocking({ /* wait for pings */ }, conditionFunction = { app.logger().log.size < pingsToWaitFor })
-        assertThat(app.logger().log).contains("0")
+        Thread.sleep(50)
+        assertThat(app.logger().log.size).isGreaterThan(0)
+        client.disconnectBlocking()
+    }
+
+
+    @Test
+    @Timeout(value = 2, unit = TimeUnit.SECONDS)
+    fun `websocket disableAutomaticPings() works`() = TestUtil.test(pingingApp()) { app, _ ->
+        val client = loggingClient(app)
+        client.connectBlocking()
+        Thread.sleep(50)
+        assertThat(app.logger().log.size).isGreaterThan(0)
         doBlocking({ client.send("DISABLE_PINGS") }, { pingFutures.size > 0 }) // check that this map clears
-        app.logger().log.clear()
-        Thread.sleep(100)
+        Thread.sleep(50)
         assertThat(app.logger().log.size).isEqualTo(0) // no pings sent during sleep after disabling pings
-        // re-enable pings, now we get the new payload [1, 1, 1]
-        client.send("ENABLE_PINGS")
-        doBlocking({ /* wait for pings */ }, conditionFunction = { app.logger().log.size < pingsToWaitFor })
-        assertThat(app.logger().log).contains("1")
         client.disconnectBlocking()
     }
 

@@ -7,25 +7,27 @@
 package io.javalin
 
 import io.javalin.compression.CompressionStrategy
+import io.javalin.compression.CompressionType.BR
+import io.javalin.compression.CompressionType.GZIP
 import io.javalin.compression.Gzip
-import io.javalin.http.Header
+import io.javalin.compression.forType
+import io.javalin.compression.impl.GzipCompressor
 import io.javalin.http.ContentType
+import io.javalin.http.Header
 import io.javalin.http.staticfiles.Location
 import io.javalin.plugin.bundled.RouteOverviewPlugin
-import io.javalin.plugin.bundled.MicrometerPlugin
 import io.javalin.testing.TestUtil
 import jakarta.servlet.http.HttpSessionEvent
 import jakarta.servlet.http.HttpSessionListener
 import org.assertj.core.api.Assertions
 import org.assertj.core.api.Assertions.assertThat
-import org.eclipse.jetty.server.Server
-import org.eclipse.jetty.server.session.SessionHandler
+import org.eclipse.jetty.server.ServerConnector
 import org.junit.jupiter.api.Test
 
 class TestConfiguration {
 
     @Test
-    fun `test all config options`() = TestUtil.runLogLess {
+    fun `all config options`() = TestUtil.runLogLess {
         val app = Javalin.create {
             it.spaRoot.addFile("/", "/public/html.html")
             it.spaRoot.addFile("/", "src/test/resources/public/html.html", Location.EXTERNAL)
@@ -37,29 +39,27 @@ class TestConfiguration {
             it.http.asyncTimeout = 10_000L
             it.http.generateEtags = true
             it.http.defaultContentType = ContentType.PLAIN
-            it.plugins.enableCors { it.reflectClientOrigin = true }
+            it.plugins.enableCors { cors -> cors.add { it.reflectClientOrigin = true } }
             it.plugins.enableDevLogging()
             it.plugins.register(RouteOverviewPlugin("/test"))
             it.plugins.enableSslRedirects()
             it.http.prefer405over404 = false
-            it.requestLoggers.http { ctx, timeInMs -> }
-            it.requestLoggers.webSocket { ws -> }
-            it.plugins.register(MicrometerPlugin())
-            it.core.showJavalinBanner = false
+            it.requestLogger.http { ctx, timeInMs -> }
+            it.requestLogger.ws { ws -> }
+            it.showJavalinBanner = false
             it.routing.contextPath = "/"
-            it.jetty.sessionHandler { SessionHandler() }
-            it.jetty.wsFactoryConfig { factory -> }
-            it.jetty.server {
-                Server()
-            }
-            it.jetty.contextHandlerConfig { handler ->
+            it.jetty.modifyJettyWebSocketServletFactory() { factory -> }
+            it.jetty.modifyServer { server -> }
+            it.jetty.modifyServletContextHandler { handler ->
                 handler.addEventListener(object : HttpSessionListener {
                     override fun sessionCreated(e: HttpSessionEvent?) {}
                     override fun sessionDestroyed(e: HttpSessionEvent?) {}
                 })
             }
+            it.jetty.modifyHttpConfiguration() { httpConfig -> }
+            it.jetty.addConnector { server, _ -> ServerConnector(server) }
         }.start(0)
-        assertThat(app.jettyServer.started).isTrue()
+        assertThat(app.jettyServer.started()).isTrue()
         app.stop()
     }
 
@@ -74,8 +74,8 @@ class TestConfiguration {
         val app = Javalin.create {
             it.compression.custom(CompressionStrategy(null, Gzip(2)))
         }
-        assertThat(app.cfg.pvt.compressionStrategy.gzip?.level).isEqualTo(2)
-        assertThat(app.cfg.pvt.compressionStrategy.brotli).isNull()
+        assertThat((app.cfg.pvt.compressionStrategy.compressors.forType(GZIP.typeName) as GzipCompressor).level).isEqualTo(2)
+        assertThat(app.cfg.pvt.compressionStrategy.compressors.forType(BR.typeName)).isNull()
     }
 
     @Test
@@ -86,11 +86,11 @@ class TestConfiguration {
     }
 
     @Test
-    fun `test contextResolvers config with custom settings`() {
+    fun `contextResolvers config with custom settings`() {
         TestUtil.test(
             Javalin.create {
-                it.core.contextResolver.ip = { "CUSTOM IP" }
-                it.core.contextResolver.host = { "CUSTOM HOST" }
+                it.contextResolver.ip = { "CUSTOM IP" }
+                it.contextResolver.host = { "CUSTOM HOST" }
             }
                 .get("/ip") { it.result(it.ip()) }
                 .get("/host") { it.result("${it.host()}") }
@@ -101,7 +101,7 @@ class TestConfiguration {
     }
 
     @Test
-    fun `test contextResolvers config with default settings`() {
+    fun `contextResolvers config with default settings`() {
         TestUtil.test(
             Javalin.create {}
                 .get("/ip") { it.result(it.ip()) }

@@ -3,7 +3,7 @@
     <parent>
         <artifactId>javalin-parent</artifactId>
         <groupId>io.javalin</groupId>
-        <version>5.0.0-SNAPSHOT</version>
+        <version>6.0.0-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -24,7 +24,13 @@
             <artifactId>javalin-testtools</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>io.javalin</groupId>
+            <artifactId>javalin-micrometer</artifactId>
+            <version>${project.version}</version>
+        </dependency>
 
+        <!-- jackson + date and kotlin modules -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
@@ -36,6 +42,12 @@
         <dependency>
             <groupId>com.fasterxml.jackson.datatype</groupId>
             <artifactId>jackson-datatype-jsr310</artifactId>
+        </dependency>
+
+        <!-- brotli compression -->
+        <dependency>
+            <groupId>com.aayushatharva.brotli4j</groupId>
+            <artifactId>brotli4j</artifactId>
         </dependency>
 
         <!-- necessary for HTTP/2 and ALPN (application layer protocol negotiation) -->

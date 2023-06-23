@@ -18,13 +18,14 @@ import io.javalin.testing.TestUtil
 import kong.unirest.Unirest
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CompletableFuture
 
 class TestAccessManager {
 
     enum class MyRoles : RouteRole { ROLE_ONE, ROLE_TWO, ROLE_THREE }
 
     private fun managedApp() = Javalin.create { config ->
-        config.core.accessManager { handler, ctx, routeRoles ->
+        config.accessManager { handler, ctx, routeRoles ->
             val role: RouteRole? = ctx.queryParam("role")?.let { MyRoles.valueOf(it) }
 
             when (role) {
@@ -38,6 +39,13 @@ class TestAccessManager {
     fun `default AccessManager throws if roles are present`() = TestUtil.test { app, http ->
         app.get("/secured", { it.result("Hello") }, ROLE_ONE)
         assertThat(callWithRole(http.origin, "/secured", "ROLE_ONE")).isEqualTo(INTERNAL_SERVER_ERROR.message)
+    }
+
+    @Test
+    fun `AccessManager does not run if roles are not present`() = TestUtil.test { app, http ->
+        app.get("/unsecured") { it.result("Hello") }
+        app.updateConfig { it.accessManager { _, _, _ -> throw RuntimeException() } }
+        assertThat(http.getBody("/unsecured")).isEqualTo("Hello")
     }
 
     @Test
@@ -69,13 +77,27 @@ class TestAccessManager {
     }
 
     @Test
-    fun `AccessManager is handled as standalone layer by servlet`() = TestUtil.test(Javalin.create {
-        it.core.accessManager { handler, ctx, _ ->
-            ctx.result("Test")
-            handler.handle(ctx)
+    fun `AccessManager supports path params`() = TestUtil.test(Javalin.create {
+        it.accessManager { _, ctx, _ ->
+            ctx.result(ctx.pathParam("userId"));
         }
     }) { app, http ->
-        app.get("/secured", { it.result(it.resultString() ?: "") }, ROLE_ONE)
+        app.get("/user/{userId}", {}, ROLE_ONE)
+        assertThat(http.get("/user/123").body).isEqualTo("123")
+    }
+
+    @Test
+    fun `AccessManager is handled as standalone layer by servlet`() = TestUtil.test(Javalin.create {
+        it.accessManager { handler, ctx, _ ->
+            ctx.future { CompletableFuture.completedFuture("Something async") }
+            handler.handle(ctx) // it shouldn't override values from current layer (like future supplier)
+        }
+    }) { app, http ->
+        app.get("/secured", { ctx ->
+            ctx.async {
+                ctx.result("Test")
+            }
+        }, ROLE_ONE)
         assertThat(callWithRole(http.origin, "/secured", "ROLE_ONE")).isEqualTo("Test")
     }
 

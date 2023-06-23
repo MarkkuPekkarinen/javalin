@@ -1,7 +1,7 @@
 package io.javalin.routing
 
 import io.javalin.config.RoutingConfig
-import io.javalin.http.urlDecode
+import io.javalin.http.servlet.urlDecode
 
 class PathParser(private val rawPath: String, routingConfig: RoutingConfig) {
 
@@ -30,6 +30,9 @@ class PathParser(private val rawPath: String, routingConfig: RoutingConfig) {
         // when multiple slashes are accepted we have to allow 0-n slashes when using ignoreTrailingSlashes
         // otherwise we also have to allow multiple slashes when only one slash is specified
         when {
+            // the root path is special: we already add a leading slash during regex construction,
+            // so we do not need to add an extra slash with the suffix
+            rawPath == "/" -> ""
             routingConfig.ignoreTrailingSlashes -> "/*"
             rawPath.endsWith("/") -> "/+"
             else -> ""
@@ -37,16 +40,24 @@ class PathParser(private val rawPath: String, routingConfig: RoutingConfig) {
     } else {
         // if ignoreTrailingSlashes config is set we keep /?, else we use the true path trailing slash : present or absent
         when {
+            // the root path is special: we already add a leading slash during regex construction,
+            // so we do not need to add an extra slash with the suffix
+            rawPath == "/" -> ""
             routingConfig.ignoreTrailingSlashes -> "/?"
             rawPath.endsWith("/") -> "/"
             else -> ""
         }
     }
 
+    private val regexOptions: Set<RegexOption> = when {
+        routingConfig.caseInsensitiveRoutes -> setOf(RegexOption.IGNORE_CASE)
+        else -> emptySet()
+    }
+
     private val matchRegex =
-        constructRegexList(routingConfig, matchPathAndEverySubPath, segments, regexSuffix) { it.asRegexString() }
+        constructRegexList(routingConfig, matchPathAndEverySubPath, segments, regexSuffix, regexOptions) { it.asRegexString() }
     private val pathParamRegex =
-        constructRegexList(routingConfig, matchPathAndEverySubPath, segments, regexSuffix) { it.asGroupedRegexString() }
+        constructRegexList(routingConfig, matchPathAndEverySubPath, segments, regexSuffix, regexOptions) { it.asGroupedRegexString() }
 
     fun matches(url: String): Boolean = matchRegex.any { url matches it }
 

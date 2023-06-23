@@ -25,12 +25,14 @@ enum class ContentType(
     TEXT_CSS("text/css", true, "css"),
     TEXT_CSV("text/csv", false, "csv"),
     TEXT_HTML("text/html", true, "html", "htm"),
+    TEXT_JS("text/javascript", true, "js", "mjs"),
     TEXT_MARKDOWN("text/markdown", true, "md"),
     TEXT_PROPERTIES("text/x-java-properties", true, "properties"),
     TEXT_XML("text/xml", true, "xml"),
 
     /* Image */
 
+    IMAGE_AVIF("image/avif", true, "avif"),
     IMAGE_BMP("image/bmp", true, "bmp"),
     IMAGE_GIF("image/gif", true, "gif"),
     IMAGE_ICO("image/vnd.microsoft.icon", true, "ico"),
@@ -73,7 +75,6 @@ enum class ContentType(
     APPLICATION_DOCX("application/vnd.openxmlformats-officedocument.wordprocessingml.document", false, "docx"),
     APPLICATION_EPUB("application/epub+zip", false, "epub"),
     APPLICATION_GZ("application/gzip", false, "gz"),
-    APPLICATION_JS("application/javascript", true, "js", "mjs"),
     APPLICATION_JSON("application/json", true, "json"),
     APPLICATION_MPKG("application/vnd.apple.installer+xml", false, "mpkg"),
     APPLICATION_JAR("application/java-archive", false, "jar"),
@@ -104,7 +105,7 @@ enum class ContentType(
         const val HTML = "text/html"
         const val XML = "text/xml"
         const val OCTET_STREAM = "application/octet-stream"
-        const val JAVASCRIPT = "application/javascript"
+        const val JAVASCRIPT = "text/javascript"
         const val JSON = "application/json"
         const val FORM_DATA = "multipart/form-data"
 

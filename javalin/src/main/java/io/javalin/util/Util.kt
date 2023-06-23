@@ -48,28 +48,16 @@ object Util {
         val hasLogger = classExists(CoreDependency.SLF4JSIMPLE.testClass) || slf4jServiceImplementationExists()
         if (!hasLogger) {
             System.err.println(
-                """|-------------------------------------------------------------------
-                   |It looks like you don't have a logger in your project.
-                   |The easiest way to fix this is to add 'slf4j-simple':
-                   |${DependencyUtil.missingDependencyMessage(CoreDependency.SLF4JSIMPLE).lines().drop(2).joinToString("\n")}
-                   |Visit https://javalin.io/documentation#logging if you need more help""".trimMargin()
+                DependencyUtil.wrapInSeparators(
+                    """|Javalin: It looks like you don't have a logger in your project.
+                       |The easiest way to fix this is to add '${CoreDependency.SLF4JSIMPLE.artifactId}':
+                       |
+                       |${DependencyUtil.mavenAndGradleSnippets(CoreDependency.SLF4JSIMPLE)}
+                       |
+                       |Visit https://javalin.io/documentation#logging if you need more help""".trimMargin()
+                )
             )
         }
-    }
-
-    @JvmStatic
-    fun logJavalinBanner(showBanner: Boolean) {
-        if (showBanner) JavalinLogger.info(
-            """|
-               |       __                  ___          ______
-               |      / /___ __   ______ _/ (_)___     / ____/
-               | __  / / __ `/ | / / __ `/ / / __ \   /___ \
-               |/ /_/ / /_/ /| |/ / /_/ / / / / / /  ____/ /
-               |\____/\__,_/ |___/\__,_/_/_/_/ /_/  /_____/
-               |
-               |       https://javalin.io/documentation
-               |""".trimMargin()
-        )
     }
 
     @JvmStatic
@@ -108,19 +96,6 @@ object Util {
     fun getResourceUrl(path: String): URL? = this.javaClass.classLoader.getResource(path)
 
     fun getFileUrl(path: String): URL? = if (File(path).exists()) File(path).toURI().toURL() else null
-
-    fun isKotlinClass(clazz: Class<*>): Boolean {
-        try {
-            for (annotation in clazz.declaredAnnotations) {
-                // Note: annotation.simpleClass can be used if kotlin-reflect is available.
-                if (annotation.annotationClass.toString().contains("kotlin.Metadata")) {
-                    return true
-                }
-            }
-        } catch (ignored: Exception) {
-        }
-        return false
-    }
 
     @JvmStatic
     fun getPort(e: Exception) = e.message!!.takeLastWhile { it != ':' }

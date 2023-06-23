@@ -6,48 +6,32 @@
 
 package io.javalin
 
-import io.github.bonigarcia.wdm.WebDriverManager
 import io.javalin.http.Header
 import io.javalin.http.util.SeekableWriter.chunkSize
-import io.javalin.testing.TestLoggingUtil.captureStdOut
 import io.javalin.testing.TestUtil
+import io.javalin.testing.TestUtil.captureStdOut
+import io.javalin.testing.WebDriverUtil
 import org.assertj.core.api.AssertionsForClassTypes.assertThat
-import org.junit.jupiter.api.AfterAll
-import org.junit.jupiter.api.Assumptions.assumeTrue
-import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.openqa.selenium.chrome.ChromeDriver
-import org.openqa.selenium.chrome.ChromeOptions
 import java.io.File
-import java.util.*
 import kotlin.math.ceil
 
 class TestWebBrowser {
 
-    companion object {
+    private lateinit var driver: ChromeDriver
 
-        lateinit var driver: ChromeDriver
+    @BeforeEach
+    fun setup() {
+        driver = WebDriverUtil.getDriver()
+    }
 
-        @BeforeAll
-        @JvmStatic
-        fun setupClass() {
-            assumeTrue(System.getProperty("RunningOnCi") == null)
-            // val os: String = System.getProperty("os.name", "generic").lowercase(Locale.ENGLISH)
-            // assumeTrue("mac" !in os && "darwin" !in os) // comment this out if you're having trouble locally
-            WebDriverManager.chromedriver().setup()
-            driver = ChromeDriver(ChromeOptions().apply {
-                addArguments("--no-sandbox")
-                addArguments("--headless")
-                addArguments("--disable-gpu")
-            })
-        }
-
-        @AfterAll
-        @JvmStatic
-        fun teardownClass() {
-            if (Companion::driver.isInitialized) {
-                driver.quit()
-            }
+    @AfterEach
+    fun teardown() {
+        if (::driver.isInitialized) { // we don't always initialize the driver when running locally
+            driver.quit()
         }
     }
 
@@ -84,7 +68,7 @@ class TestWebBrowser {
         val expectedChunkCount = ceil(file.inputStream().available() / chunkSize.toDouble()).toInt()
         var chunkCount = 0
         val requestLoggerApp = Javalin.create {
-            it.requestLoggers.http { ctx, ms ->
+            it.requestLogger.http { ctx, ms ->
                 if (ctx.req().getHeader(Header.RANGE) == null) return@http
                 chunkCount++
                 // println("Req: " + ctx.req.getHeader(Header.RANGE))

@@ -14,6 +14,7 @@ object SeekableWriter {
         if (ctx.header(Header.RANGE) == null) {
             ctx.header(Header.CONTENT_TYPE, contentType)
             inputStream.transferTo(uncompressedStream)
+            inputStream.close()
             return@async
         }
         val requestedRange = ctx.header(Header.RANGE)!!.split("=")[1].split("-").filter { it.isNotEmpty() }
@@ -43,6 +44,5 @@ object SeekableWriter {
             this.write(buffer, 0, read)
             bytesLeft -= read
         }
-        inputStream.close()
     }
 }
