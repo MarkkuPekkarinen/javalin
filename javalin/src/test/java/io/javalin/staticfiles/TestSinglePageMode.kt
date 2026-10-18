@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Javalin - https://javalin.io
  * Copyright 2017 David Åse
  * Licensed under Apache 2.0: https://github.com/tipsy/javalin/blob/master/LICENSE
@@ -7,9 +7,9 @@
 package io.javalin.staticfiles
 
 import io.javalin.Javalin
-import io.javalin.http.Header
 import io.javalin.http.ContentType
 import io.javalin.http.Context
+import io.javalin.http.Header
 import io.javalin.http.HttpStatus.IM_A_TEAPOT
 import io.javalin.http.HttpStatus.NOT_FOUND
 import io.javalin.http.HttpStatus.OK
@@ -89,8 +89,8 @@ class TestSinglePageMode {
 
     @Test
     fun `SinglePageHandler doesn't affect JSON requests - classpath`() = TestUtil.test(rootSinglePageApp_classPath) { _, http ->
-        assertThat(http.jsonGet("/").body).contains(NOT_FOUND.message)
-        assertThat(http.jsonGet("/not-a-file.html").body).contains(NOT_FOUND.message)
+        assertThat(http.jsonGet("/").body).contains("Endpoint GET / not found")
+        assertThat(http.jsonGet("/not-a-file.html").body).contains("Endpoint GET /not-a-file.html not found")
         assertThat(http.jsonGet("/not-a-file.html").httpCode()).isEqualTo(NOT_FOUND)
     }
 
@@ -111,7 +111,7 @@ class TestSinglePageMode {
 
     @Test
     fun `SinglePageHandler works for just subpaths - classpath`() = TestUtil.test(dualSinglePageApp_classPath) { _, http ->
-        assertThat(http.htmlGet("/").body).contains(NOT_FOUND.message)
+        assertThat(http.htmlGet("/").body).contains("Endpoint GET / not found")
         assertThat(http.htmlGet("/").httpCode()).isEqualTo(NOT_FOUND)
         assertThat(http.htmlGet("/admin").body).contains("Secret file")
         assertThat(http.htmlGet("/admin/not-a-path").body).contains("Secret file")
@@ -145,7 +145,10 @@ class TestSinglePageMode {
     fun `SinglePageHandler doesn't cache on localhost`() {
         val file = File(workingDirectory, "my-special-file.html").also { it.writeText("old file") }
         TestUtil.test(Javalin.create { it.spaRoot.addFile("/", file.absolutePath, Location.EXTERNAL) }) { app, http ->
-            fun getSpaPage() = http.getBody("/")
+            fun getSpaPage() = http.get("/").let { response ->
+                assertThat(response.status).isEqualTo(OK.code)
+                response.body
+            }
             assertThat(getSpaPage()).contains("old file")
             file.writeText("new file")
             assertThat(getSpaPage()).contains("new file")

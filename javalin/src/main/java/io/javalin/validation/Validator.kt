@@ -6,44 +6,82 @@
 
 package io.javalin.validation
 
-import io.javalin.util.JavalinLogger
-import org.jetbrains.annotations.NotNull
+import io.javalin.util.JavalinException
+import io.javalin.util.javalinLazy
 
-/**
- * The non-nullable [Validator] uses [Rule] rules, but checks if value is null before calling them.
- * The [check] method wraps its non-nullable predicate in a nullable predicate
- */
-open class Validator<T>(fieldName: String, typedValue: T? = null, stringSource: StringSource<T>? = null) : BaseValidator<T>(fieldName, typedValue, stringSource) {
+typealias Check<T> = (T) -> Boolean
 
-    constructor(stringValue: String?, clazz: Class<T>, fieldName: String) :
-        this(fieldName, null, StringSource<T>(stringValue, clazz))
-
-    fun allowNullable(): NullableValidator<T> {
-        if (this.rules.isEmpty()) return NullableValidator(fieldName, typedValue, stringSource)
-        throw IllegalStateException("Validator#allowNullable must be called before adding rules")
-    }
-
-    fun check(check: Check<T>, error: String) = addRule(fieldName, { check(it!!) }, error) as Validator<T>
-    fun check(check: Check<T>, error: ValidationError<T>) = addRule(fieldName, { check(it!!) }, error) as Validator<T>
-
-    fun hasValue() = stringSource?.stringValue != null || typedValue != null
-
-    @NotNull // there is a null-check in BaseValidator
-    override fun get(): T = super.get()!!
-
-    fun getOrDefault(default: T) = if (hasValue()) super.get()!! else default
-
-    @NotNull
-    override fun getOrThrow(exceptionFunction: (Map<String, List<ValidationError<Any>>>) -> Exception) = super.getOrThrow(exceptionFunction)!!
-
-    companion object {
-        @JvmStatic
-        fun <T> create(clazz: Class<T>, value: String?, fieldName: String) = if (JavalinValidation.hasConverter(clazz)) {
-            Validator(value, clazz, fieldName)
-        } else {
-            JavalinLogger.info("Can't convert to ${clazz.name}. Register a converter using JavalinValidation#register.")
-            throw MissingConverterException(clazz.name)
-        }
-    }
+data class Rule(val fieldName: String, val check: Check<Any?>, val error: ValidationError<Any?>)
+class ValidationException(val errors: Map<String, List<ValidationError<Any>>>) : JavalinException("Validation failed")
+data class ValidationError<out T> @JvmOverloads constructor(
+    val message: String,
+    val args: Map<String, Any?> = mapOf(),
+    @JvmField var value: Any? = null,
+    private val exception: Exception? = null
+) {
+    fun exception(): Exception? = exception
 }
 
+data class Params(
+    val fieldName: String,
+    val clazz: Class<*>? = null,
+    val stringValue: String? = null,
+    val typedValue: Any? = null,
+    val valueSupplier: () -> Any? = { null }
+)
+
+@Suppress("UNCHECKED_CAST")
+open class Validator<T> internal constructor(internal val params: Params, internal val fieldName: String = params.fieldName) {
+    internal val rules = mutableListOf<Rule>()
+    internal var typedValue: Any? = null
+
+    protected open val conversionErrorMessage = "TYPE_CONVERSION_FAILED"
+
+    private val errors: Map<String, List<ValidationError<Any?>>> by javalinLazy {
+        typedValue = params.typedValue ?: try {
+            params.valueSupplier()
+        } catch (e: Exception) {
+            return@javalinLazy mapOf(fieldName to listOf(ValidationError(conversionErrorMessage, value = params.stringValue, exception = e)))
+        }
+        val errors = mutableMapOf<String, MutableList<ValidationError<Any?>>>()
+        // A null value can't satisfy a typed check (and would NPE a non-null-safe one), so skip
+        // checks and let get()/required() surface it as NULLCHECK_FAILED instead.
+        rules.filter { typedValue != null && !it.check(typedValue) }.forEach { failedRule ->
+            errors.computeIfAbsent(failedRule.fieldName) { mutableListOf() }
+            errors[failedRule.fieldName]!!.add(failedRule.error.also { it.value = typedValue })
+        }
+        errors.mapValues { it.value.toList() }.toMap()
+    }
+
+    fun errors(): Map<String, List<ValidationError<T>>> = errors as Map<String, List<ValidationError<T>>>
+    fun hasValue() = !params.stringValue.isNullOrEmpty() || typedValue != null
+
+    internal fun addCheck(fieldName: String, check: Check<Any?>, error: ValidationError<Any?>) {
+        rules.add(Rule(fieldName, check, error))
+    }
+
+    open fun check(check: Check<T>, error: String) = apply { addCheck(fieldName, check as Check<Any?>, ValidationError(error)) }
+    open fun check(check: Check<T>, error: ValidationError<*>) = apply { addCheck(fieldName, check as Check<Any?>, error) }
+
+    open fun required(): Validator<T & Any> {
+        @Suppress("UNCHECKED_CAST")
+        return this as Validator<T & Any>
+    }
+
+    fun get(): T & Any {
+        if (errors.isNotEmpty()) throw ValidationException(errors as Map<String, List<ValidationError<Any>>>)
+        return typedValue as? (T & Any) ?: throw ValidationException(mapOf(fieldName to listOf(ValidationError("NULLCHECK_FAILED", value = params.stringValue))))
+    }
+
+    fun getOrNull(): T? {
+        if (errors.isNotEmpty()) throw ValidationException(errors as Map<String, List<ValidationError<Any>>>)
+        return typedValue as T?
+    }
+
+    fun getOrDefault(default: T & Any): T & Any = getOrNull() ?: default
+
+    fun getOrThrow(exceptionFunction: (Map<String, List<ValidationError<Any>>>) -> Exception): T & Any {
+        if (errors.isNotEmpty()) throw exceptionFunction(errors as Map<String, List<ValidationError<Any>>>)
+        return typedValue as? (T & Any) ?: throw exceptionFunction(mapOf(fieldName to listOf(ValidationError("NULLCHECK_FAILED", value = params.stringValue))))
+    }
+}

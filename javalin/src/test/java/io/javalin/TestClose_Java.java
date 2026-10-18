@@ -8,9 +8,11 @@
 package io.javalin;
 
 import io.javalin.testing.TestUtil;
-import java.util.Objects;
 import org.eclipse.jetty.server.Server;
 import org.junit.jupiter.api.Test;
+
+import java.util.Objects;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TestClose_Java {
@@ -21,7 +23,7 @@ class TestClose_Java {
             final Javalin app = Javalin.create();
 
             //noinspection EmptyTryBlock
-            try (final Javalin ignored = app.start(0)) {
+            try (final AutoClosableJavalin ignored = new AutoClosableJavalin(app).start(0)) {
                 // do nothing
             }
 
@@ -34,13 +36,13 @@ class TestClose_Java {
     void tryWithResourcesCallsLifecycleEvents() {
         TestUtil.runLogLess(() -> {
             final StringBuilder log = new StringBuilder();
-            final Javalin app = Javalin.create().events(event -> {
-                event.serverStopping(() -> log.append("Stopping"));
-                event.serverStopped(() -> log.append("Stopped"));
+            final Javalin app = Javalin.create(config -> {
+                config.events.serverStopping(() -> log.append("Stopping"));
+                config.events.serverStopped(() -> log.append("Stopped"));
             });
 
             //noinspection EmptyTryBlock
-            try (final Javalin ignored = app.start(0)) {
+            try (final AutoClosableJavalin ignored = new AutoClosableJavalin(app).start(0)) {
                 // do nothing
             }
 
@@ -52,11 +54,11 @@ class TestClose_Java {
     void closingInsideTryWithResourcesIsIdempotent() {
         TestUtil.runLogLess(() -> {
             final StringBuilder log = new StringBuilder();
-            final Javalin app = Javalin.create().events(event -> {
-                event.serverStopping(() -> log.append("Stopping"));
-                event.serverStopped(() -> log.append("Stopped"));
+            final Javalin app = Javalin.create(config -> {
+                config.events.serverStopping(() -> log.append("Stopping"));
+                config.events.serverStopped(() -> log.append("Stopped"));
             });
-            try (final Javalin startedApp = app.start(0)) {
+            try (final AutoClosableJavalin startedApp = new AutoClosableJavalin(app).start(0)) {
                 //noinspection RedundantExplicitClose
                 startedApp.close();
             }

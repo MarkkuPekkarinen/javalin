@@ -24,15 +24,13 @@ fun main() {
             httpConnector.port = 80
             httpConnector
         }
+        it.routes.get("/") { ctx -> ctx.result("Hello World") } // valid endpoint for both connectors
     }.start()
-
-    app.get("/") { it.result("Hello World") } // valid endpoint for both connectors
 }
 
 private fun sslContextFactory(): SslContextFactory.Server {
     val sslContextFactory = SslContextFactory.Server()
     sslContextFactory.keyStorePath = HelloWorldSecure::class.java.getResource("/keystore.jks")!!.toExternalForm()
-    sslContextFactory.keyStorePassword = "password"
+    sslContextFactory.keyStorePassword = "localhost"
     return sslContextFactory
 }
-

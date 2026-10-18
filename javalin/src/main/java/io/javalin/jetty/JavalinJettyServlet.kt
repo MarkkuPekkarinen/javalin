@@ -6,91 +6,113 @@
 
 package io.javalin.jetty
 
-import io.javalin.config.JavalinConfig
-import io.javalin.http.Context
-import io.javalin.http.Handler
+import io.javalin.config.JavalinState
 import io.javalin.http.Header
-import io.javalin.http.HttpStatus
+import io.javalin.http.HandlerType
 import io.javalin.http.servlet.JavalinServlet
-import io.javalin.http.servlet.JavalinServletContext
-import io.javalin.security.RouteRole
-import io.javalin.security.accessManagerNotConfiguredException
-import io.javalin.websocket.*
+import io.javalin.http.servlet.JavalinServletContextConfig
+import io.javalin.http.servlet.JavalinWsServletContext
+import io.javalin.http.servlet.Task
+import io.javalin.router.Endpoint
+import io.javalin.security.Roles
+import io.javalin.util.javalinLazy
+import io.javalin.websocket.WsConnection
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
-import org.eclipse.jetty.server.session.Session
+import org.eclipse.jetty.ee10.websocket.server.JettyWebSocketCreator
+import org.eclipse.jetty.ee10.websocket.server.JettyWebSocketServlet
+import org.eclipse.jetty.ee10.websocket.server.JettyWebSocketServletFactory
 import org.eclipse.jetty.websocket.api.util.WebSocketConstants
-import org.eclipse.jetty.websocket.server.JettyWebSocketCreator
-import org.eclipse.jetty.websocket.server.JettyWebSocketServlet
-import org.eclipse.jetty.websocket.server.JettyWebSocketServletFactory
-import java.util.function.Consumer
 
 internal const val upgradeContextKey = "javalin-ws-upgrade-context"
-internal const val upgradeSessionAttrsKey = "javalin-ws-upgrade-http-session"
 
 /**
  * The [JavalinJettyServlet] is responsible for both WebSocket and HTTP requests.
- * It extends Jetty's [WebSocketServlet], and has a [JavalinServlet] as a constructor arg.
+ * It extends Jetty's [JettyWebSocketServlet], and has a [JavalinServlet] as a constructor arg.
  * It switches between WebSocket and HTTP in the [service] method.
  */
-class JavalinJettyServlet(val cfg: JavalinConfig, private val httpServlet: JavalinServlet) : JettyWebSocketServlet() {
+class JavalinJettyServlet(val cfg: JavalinState) : JettyWebSocketServlet() {
 
-    val wsExceptionMapper = WsExceptionMapper()
-    val wsPathMatcher = WsPathMatcher()
-
-    fun addHandler(handlerType: WsHandlerType, path: String, ws: Consumer<WsConfig>, roles: Set<RouteRole>) {
-        wsPathMatcher.add(WsEntry(handlerType, path, cfg.routing, WsConfig().apply { ws.accept(this) }, roles))
-    }
+    private val httpServlet = JavalinServlet(cfg)
+    private val servletContextConfig by javalinLazy { JavalinServletContextConfig.of(cfg) }
 
     override fun configure(factory: JettyWebSocketServletFactory) { // this is called once, before everything
-        cfg.jetty.wsFactoryConfigs.forEach{ it.accept(factory) }
+        cfg.jettyInternal.wsFactoryConfigs.forEach{ it.accept(factory) }
         factory.setCreator(JettyWebSocketCreator { req, _ -> // this is called when a websocket is created (after [service])
-            val preUpgradeContext = req.httpServletRequest.getAttribute(upgradeContextKey) as JavalinServletContext
-            req.httpServletRequest.setAttribute(upgradeContextKey, preUpgradeContext.changeBaseRequest(req.httpServletRequest))
-            val session = req.session as? Session?
-            req.httpServletRequest.setAttribute(upgradeSessionAttrsKey, session?.attributeNames?.asSequence()?.associateWith { session.getAttribute(it) })
-            return@JettyWebSocketCreator WsConnection(wsPathMatcher, wsExceptionMapper, cfg.pvt.wsLogger)
+            val upgradeCtx = req.httpServletRequest.getAttribute(upgradeContextKey) as JavalinWsServletContext
+            return@JettyWebSocketCreator WsConnection(cfg.wsRouter.wsPathMatcher, cfg.wsRouter.wsExceptionMapper, cfg.wsRequestLogger, upgradeCtx)
         })
     }
 
     override fun service(req: HttpServletRequest, res: HttpServletResponse) { // this handles both http and websocket
-        if (req.getHeader(Header.SEC_WEBSOCKET_KEY) == null) { // this isn't a websocket request
+        if (req.getHeader(Header.SEC_WEBSOCKET_VERSION) == null) { // this isn't a websocket request (works for both HTTP/1.1 and HTTP/2)
             return httpServlet.service(req, res) // treat as normal HTTP request
         }
+        return serviceWebSocketRequest(req, res)
+    }
+
+    private fun serviceWebSocketRequest(req: HttpServletRequest, res: HttpServletResponse) {
+        val requestStartTime = System.nanoTime()
         val requestUri = req.requestURI.removePrefix(req.contextPath)
-        val entry = wsPathMatcher.findEndpointHandlerEntry(requestUri) ?: return res.sendError(404, "WebSocket handler not found")
-        val upgradeContext = JavalinServletContext(
+        val wsRouterHandlerEntry = cfg.wsRouter.wsPathMatcher.findEndpointHandlerEntry(requestUri)
+        if (wsRouterHandlerEntry == null) {
+            res.sendError(404, "WebSocket handler not found")
+            // Still need to call upgrade logger for 404 cases
+            val upgradeContext = JavalinWsServletContext(servletContextConfig, req, res)
+            val executionTimeMs = calculateExecutionTimeMs(requestStartTime)
+            cfg.wsRequestLogger?.wsUpgradeLogger?.handle(upgradeContext, executionTimeMs)
+            return
+        }
+
+        val wsPathParams = wsRouterHandlerEntry.extractPathParams(requestUri)
+        val wsEndpoint = Endpoint.create(HandlerType.GET, wsRouterHandlerEntry.path)
+            .addMetadata(Roles(wsRouterHandlerEntry.roles))
+            .handler { }
+
+        val upgradeContext = JavalinWsServletContext(
+            cfg = servletContextConfig,
             req = req,
             res = res,
-            cfg = cfg,
-            matchedPath = entry.path,
-            pathParamMap = entry.extractPathParams(requestUri),
-        )
-        if (!allowedByAccessManager(entry, upgradeContext)) return res.sendError(HttpStatus.UNAUTHORIZED.code, HttpStatus.UNAUTHORIZED.message)
+            routeRoles = wsRouterHandlerEntry.roles,
+        ).apply { update(wsEndpoint, wsPathParams) }
         req.setAttribute(upgradeContextKey, upgradeContext)
-        setWsProtocolHeader(req, res)
-        super.service(req, res) // everything is okay, perform websocket upgrade
-    }
+        res.setWsProtocolHeader(req)
+        // add before handlers
+        cfg.internalRouter.findHttpHandlerEntries(HandlerType.WEBSOCKET_BEFORE_UPGRADE, requestUri)
+            .forEach { handler -> upgradeContext.tasks.offer(Task { handler.handle(upgradeContext, requestUri) }) }
+        // add the actual upgrade handler
+        upgradeContext.tasks.offer(Task {
+            upgradeContext.extractedData.snapshotAttributes() // re-snapshot after wsBeforeUpgrade handlers have run
+            super.service(req, res)
+        })
+        // add after handlers
+        cfg.internalRouter.findHttpHandlerEntries(HandlerType.WEBSOCKET_AFTER_UPGRADE, requestUri)
+            .forEach { handler -> upgradeContext.tasks.offer(Task { handler.handle(upgradeContext, requestUri) }) }
 
-    private val setUpgradeAllowed = Handler { it.attribute("javalin-ws-upgrade-allowed", true) }
-
-    private fun allowedByAccessManager(entry: WsEntry, ctx: Context): Boolean = try {
-        when {
-            // we run upgrade-allowed-setter against user access manager to see if upgrade-request should be allowed
-            cfg.pvt.accessManager != null -> cfg.pvt.accessManager?.manage(setUpgradeAllowed, ctx, entry.roles)
-            entry.roles.isNotEmpty() -> throw accessManagerNotConfiguredException()
-            else -> setUpgradeAllowed.handle(ctx)
+        try {
+            while (upgradeContext.tasks.isNotEmpty()) { // execute all tasks in order
+                try {
+                    val task = upgradeContext.tasks.poll()
+                    task.handler.handle()
+                } catch (e: Exception) {
+                    cfg.internalRouter.handleHttpException(upgradeContext, e)
+                    break
+                }
+            }
+        } finally {
+            // Call the WebSocket upgrade logger whether successful or not
+            val executionTimeMs = calculateExecutionTimeMs(requestStartTime)
+            cfg.wsRequestLogger?.wsUpgradeLogger?.handle(upgradeContext, executionTimeMs)
         }
-        ctx.attribute<Boolean>("javalin-ws-upgrade-allowed") == true // attribute is true if access manger allowed the request
-    } catch (e: Exception) {
-        false
     }
 
-    private fun setWsProtocolHeader(req: HttpServletRequest, res: HttpServletResponse) {
+    private fun HttpServletResponse.setWsProtocolHeader(req: HttpServletRequest) {
         val wsProtocolHeader = req.getHeader(WebSocketConstants.SEC_WEBSOCKET_PROTOCOL) ?: return
         val firstProtocol = wsProtocolHeader.split(',').map { it.trim() }.find { it.isNotBlank() } ?: return
-        res.setHeader(WebSocketConstants.SEC_WEBSOCKET_PROTOCOL, firstProtocol)
+        this.setHeader(WebSocketConstants.SEC_WEBSOCKET_PROTOCOL, firstProtocol)
     }
 
-}
+    private fun calculateExecutionTimeMs(startTimeNanos: Long): Float =
+        (System.nanoTime() - startTimeNanos) / 1_000_000.0f
 
+}

@@ -1,14 +1,14 @@
 package io.javalin.http
 
-import java.util.Locale
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertDoesNotThrow
+import java.util.*
 
 class HttpResponseExceptionTest {
 
     @Test
     fun `all HttpStatus values should be covered by an Exception class`() {
-        for (httpStatus in HttpStatus.values()) {
+        for (httpStatus in HttpStatus.entries) {
             if (httpStatus == HttpStatus.UNKNOWN) {
                 continue
             }

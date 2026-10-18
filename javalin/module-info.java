@@ -15,7 +15,7 @@ module io.javalin {
     exports io.javalin.plugin;
     exports io.javalin.plugin.bundled;
     exports io.javalin.rendering;
-    exports io.javalin.routing;
+    exports io.javalin.router;
     exports io.javalin.security;
     exports io.javalin.util;
     exports io.javalin.util.function;
@@ -23,25 +23,26 @@ module io.javalin {
     exports io.javalin.vue;
     exports io.javalin.websocket;
 
-    requires transitive org.jetbrains.annotations;
     requires transitive kotlin.stdlib;
     requires transitive org.slf4j;
     requires transitive org.eclipse.jetty.server;
-    requires transitive org.eclipse.jetty.servlet;
+    requires transitive org.eclipse.jetty.ee10.servlet;
     requires transitive org.eclipse.jetty.util;
     requires transitive org.eclipse.jetty.websocket.core.common;
-    requires transitive org.eclipse.jetty.websocket.jetty.api;
-    requires transitive org.eclipse.jetty.websocket.jetty.server;
+    requires transitive org.eclipse.jetty.ee10.websocket.jetty.server;
+    requires transitive org.eclipse.jetty.websocket.api;
 
     //optional dependencies
+    requires static org.jetbrains.annotations;
     requires static com.aayushatharva.brotli4j;
     requires static com.aayushatharva.brotli4j.service;
+    requires static com.github.luben.zstdjni;
     requires static com.fasterxml.jackson.databind;
     requires static com.fasterxml.jackson.kotlin;
+    requires static tools.jackson.databind;
+    requires static tools.jackson.module.kotlin;
     requires static com.google.gson;
 
-    //ServiceLoader stuff
-
-    uses io.javalin.rendering.JavalinRenderer.FileRendererLoader;
+    //Required to use the Service Loader on this type
     uses org.slf4j.spi.SLF4JServiceProvider;
 }

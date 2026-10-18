@@ -6,9 +6,19 @@
  */
 package io.javalin.staticfiles
 
+import com.aayushatharva.brotli4j.Brotli4jLoader
+import com.aayushatharva.brotli4j.decoder.BrotliInputStream
 import io.javalin.Javalin
+import io.javalin.compression.Brotli
+import io.javalin.compression.CompressionStrategy
+import io.javalin.compression.Gzip
+import io.javalin.config.JavalinConfig
+import io.javalin.http.ContentType
 import io.javalin.http.Header
-import io.javalin.jetty.JettyPrecompressingResourceHandler
+import io.javalin.http.HttpStatus
+import io.javalin.http.staticfiles.JavalinStaticResourceHandler
+import io.javalin.http.staticfiles.Location
+import io.javalin.jetty.JettyResourceHandler
 import io.javalin.testing.HttpUtil
 import io.javalin.testing.TestDependency
 import io.javalin.testing.TestUtil
@@ -16,59 +26,214 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
+import java.util.zip.GZIPInputStream
 
 class TestStaticFilesPrecompressor {
 
     private val swaggerBasePath = "/webjars/swagger-ui/${TestDependency.swaggerVersion}"
 
-    private val configPrecompressionStaticResourceApp: Javalin by lazy {
-        Javalin.create { javalin ->
-            javalin.compression.brotliAndGzip()
-            javalin.staticFiles.add { staticFiles ->
-                staticFiles.directory = "META-INF/resources/webjars"
-                staticFiles.precompress = true
-            }
-            javalin.staticFiles.add { staticFiles ->
-                staticFiles.directory = "/public/immutable"
-                staticFiles.precompress = true
-            }
-            javalin.staticFiles.add { staticFiles ->
-                staticFiles.directory = "/public/protected"
-                staticFiles.precompress = true
-            }
+    val precompressMaxSize = 2 * 1024 * 1024
+
+    private val configPrecompressionStaticResourceConfig = { cfg: JavalinConfig ->
+        cfg.http.compressionStrategy = CompressionStrategy(Brotli(), Gzip())
+        cfg.staticFiles.add { staticFiles ->
+            staticFiles.hostedPath = "/webjars"
+            staticFiles.directory = "META-INF/resources/webjars"
+            staticFiles.precompressMaxSize = precompressMaxSize
+        }
+        cfg.staticFiles.add { staticFiles ->
+            staticFiles.directory = "/public/immutable"
+            staticFiles.precompressMaxSize = precompressMaxSize
+        }
+        cfg.staticFiles.add { staticFiles ->
+            staticFiles.directory = "/public/protected"
+            staticFiles.precompressMaxSize = precompressMaxSize
         }
     }
 
     @Test
-    fun `content-length unavailable for large files if precompression not enabled`() = TestUtil.test(Javalin.create { config -> config.staticFiles.enableWebjars() }) { _, http ->
-        assertThat(http.getFile("$swaggerBasePath/swagger-ui-bundle.js", "gzip").contentLength()).isNull()
-        assertThat(http.getFile("$swaggerBasePath/swagger-ui.js.gz", "gzip").contentLength()).isNull()
+    fun `content-length is set for large files even if precompression not enabled`() = testStaticFiles({ cfg ->
+        cfg.staticFiles.enableWebjars()
+    }) { _, http ->
+        // compressible JS gets gzipped on the fly, so it's chunked without a Content-Length
+        assertThat(http.getFile("$swaggerBasePath/swagger-ui-bundle.js", "gzip"))
+            .extracting({ it.code }, { it.contentLength() })
+            .containsExactly(HttpStatus.OK.code, null)
+        // already-compressed .gz is served as-is and now carries a Content-Length
+        assertThat(http.getFile("$swaggerBasePath/swagger-ui.js.gz", "gzip"))
+            .extracting({ it.code }, { it.contentLength() != null })
+            .containsExactly(HttpStatus.OK.code, true)
     }
 
     @Test
-    fun `content-length available for large files if precompression enabled`() = TestUtil.test(configPrecompressionStaticResourceApp) { _, http ->
-        assertThat(http.getFile("/secret.html", "br, gzip").contentLength()).isNotBlank()
-        assertThat(http.getFile("/library-1.0.0.min.js", "br").contentLength()).isNotBlank()
-        assertThat(http.getFile("$swaggerBasePath/swagger-ui-bundle.js", "gzip").contentLength()).isNotBlank()
+    fun `content-length available for large files if precompression enabled`() = testStaticFiles(configPrecompressionStaticResourceConfig) { _, http ->
+        val secretResponse = http.getFile("/secret.html", "br, gzip")
+        assertThat(secretResponse.code).isEqualTo(200)
+        assertThat(secretResponse.contentLength()).isNotBlank()
+
+        val libraryResponse = http.getFile("/library-1.0.0.min.js", "br")
+        assertThat(libraryResponse.code).isEqualTo(200)
+        assertThat(libraryResponse.contentLength()).isNotBlank()
+
+        val swaggerResponse = http.getFile("$swaggerBasePath/swagger-ui-bundle.js", "gzip")
+        assertThat(swaggerResponse.code).isEqualTo(200)
+        assertThat(swaggerResponse.contentLength()).isNotBlank()
     }
 
     @Test
-    fun `compression works if precompression enabled`() = TestUtil.test(configPrecompressionStaticResourceApp) { _, http ->
-        assertThat(http.getFile("/secret.html", "gzip").contentEncoding()).isEqualTo("gzip")
-        assertThat(http.getFile("/library-1.0.0.min.js", "br").contentEncoding()).isEqualTo("br")
-        assertThat(http.getFile("$swaggerBasePath/swagger-ui-bundle.js", "gzip").contentEncoding()).isEqualTo("gzip")
-        assertThat(http.getFile("$swaggerBasePath/swagger-ui.js.gz", "gzip").contentEncoding()).isNull()
+    fun `compression works if precompression enabled`() = testStaticFiles(configPrecompressionStaticResourceConfig) { _, http ->
+        assertThat(http.getFile("/secret.html", "gzip"))
+            .extracting({ it.code }, { it.contentEncoding() })
+            .containsExactly(HttpStatus.OK.code, "gzip")
+        assertThat(http.getFile("/library-1.0.0.min.js", "br"))
+            .extracting({ it.code }, { it.contentEncoding() })
+            .containsExactly(HttpStatus.OK.code, "br")
+        assertThat(http.getFile("$swaggerBasePath/swagger-ui-bundle.js", "gzip"))
+            .extracting({ it.code }, { it.contentEncoding() })
+            .containsExactly(HttpStatus.OK.code, "gzip")
+        assertThat(http.getFile("$swaggerBasePath/swagger-ui.js.gz", "gzip"))
+            .extracting({ it.code }, { it.contentEncoding() })
+            .containsExactly(HttpStatus.OK.code, null)
     }
 
     @Test
-    fun `only creates one compressed version even if query params are present`() = TestUtil.test(configPrecompressionStaticResourceApp) { _, http ->
-        val oldSize = JettyPrecompressingResourceHandler.compressedFiles.size
-        assertThat(http.getFile("/secret.html", "gzip").contentEncoding()).isEqualTo("gzip")
-        assertThat(http.getFile("/secret.html?qp=1", "gzip").contentEncoding()).isEqualTo("gzip")
-        assertThat(http.getFile("/secret.html?qp=2", "gzip").contentEncoding()).isEqualTo("gzip")
-        assertThat(JettyPrecompressingResourceHandler.compressedFiles.size <= oldSize + 1)
+    fun `only creates one compressed version even if query params are present`() = testStaticFiles(configPrecompressionStaticResourceConfig) { app, http ->
+        val oldSize = getPrecompressCacheSize(app)
+        assertThat(http.getFile("/secret.html", "gzip"))
+            .extracting({ it.code }, { it.contentEncoding() })
+            .containsExactly(HttpStatus.OK.code, "gzip")
+        assertThat(http.getFile("/secret.html?qp=1", "gzip"))
+            .extracting({ it.code }, { it.contentEncoding() })
+            .containsExactly(HttpStatus.OK.code, "gzip")
+        assertThat(http.getFile("/secret.html?qp=2", "gzip"))
+            .extracting({ it.code }, { it.contentEncoding() })
+            .containsExactly(HttpStatus.OK.code, "gzip")
+        assertThat(getPrecompressCacheSize(app) <= oldSize + 1).isTrue()
     }
+
+    /** Get precompress cache size from either Jetty or Javalin resource handler */
+    private fun getPrecompressCacheSize(app: Javalin): Int {
+        return when (val handler = app.unsafe.resourceHandler) {
+            is JettyResourceHandler -> handler.precompressingHandler.getCacheSize()
+            is JavalinStaticResourceHandler -> handler.getPrecompressCacheSize()
+            else -> throw IllegalStateException("Unknown resource handler type: ${handler?.javaClass}")
+        }
+    }
+
+    @Test
+    fun `first available encoding is used`() = testStaticFiles(configPrecompressionStaticResourceConfig) { _, http ->
+        assertThat(http.getFile("/secret.html", "br"))
+            .extracting({ it.code }, { it.contentEncoding() })
+            .containsExactly(HttpStatus.OK.code, "br")
+        assertThat(http.getFile("/secret.html", "gzip"))
+            .extracting({ it.code }, { it.contentEncoding() })
+            .containsExactly(HttpStatus.OK.code, "gzip")
+        assertThat(http.getFile("/secret.html", "gzip, br"))
+            .extracting({ it.code }, { it.contentEncoding() })
+            .containsExactly(HttpStatus.OK.code, "gzip")
+        assertThat(http.getFile("/secret.html", "br, gzip"))
+            .extracting({ it.code }, { it.contentEncoding() })
+            .containsExactly(HttpStatus.OK.code, "br")
+        assertThat(http.getFile("/secret.html", "deflate, gzip, br"))
+            .extracting({ it.code }, { it.contentEncoding() })
+            .containsExactly(HttpStatus.OK.code, "gzip")
+    }
+
+    @Test
+    fun `precompressed files are served with correct content-type`() = testStaticFiles(configPrecompressionStaticResourceConfig) { _, http ->
+        assertThat(http.getFile("/secret.html", "br"))
+            .extracting({ it.code }, { it.header(Header.CONTENT_TYPE) })
+            .containsExactly(HttpStatus.OK.code, "text/html")
+        assertThat(http.getFile("/library-1.0.0.min.js", "br"))
+            .extracting({ it.code }, { it.header(Header.CONTENT_TYPE) })
+            .containsExactly(HttpStatus.OK.code, "text/javascript")
+        assertThat(http.getFile("/library-1.0.0.min.js", "gzip, br"))
+            .extracting({ it.code }, { it.header(Header.CONTENT_TYPE) })
+            .containsExactly(HttpStatus.OK.code, "text/javascript")
+        assertThat(http.getFile("/library-1.0.0.min.js", "deflate"))
+            .extracting({ it.code }, { it.header(Header.CONTENT_TYPE) })
+            .containsExactly(HttpStatus.OK.code, "text/javascript")
+    }
+
+    @Test
+    fun `response encoding matches header`() = testStaticFiles(configPrecompressionStaticResourceConfig) { _, http ->
+        // Gzip
+        val gzipResponse = http.getFile("/secret.html", "gzip")
+        assertThat(gzipResponse)
+            .extracting({ it.code }, { it.header(Header.CONTENT_ENCODING) })
+            .containsExactly(HttpStatus.OK.code, "gzip")
+        val gzipInputStream = GZIPInputStream(gzipResponse.body?.byteStream())
+        assertThat(gzipInputStream.readBytes().toString(Charsets.UTF_8)).contains("<h1>Secret file</h1>")
+        gzipInputStream.close()
+
+        // Brotli
+        assumeTrue(Brotli4jLoader.isAvailable())
+        val brotliResponse = http.getFile("/secret.html", "br")
+        assertThat(brotliResponse)
+            .extracting({ it.code }, { it.header(Header.CONTENT_ENCODING) })
+            .containsExactly(HttpStatus.OK.code, "br")
+        val brotliInputStream = BrotliInputStream(brotliResponse.body?.byteStream())
+        assertThat(brotliInputStream.readBytes().toString(Charsets.UTF_8)).contains("<h1>Secret file</h1>")
+        brotliInputStream.close()
+    }
+
+    @Test
+    fun `compression strategy is used`() = testStaticFiles({ config ->
+        config.http.compressionStrategy = CompressionStrategy(Brotli())
+        config.staticFiles.add { staticFiles ->
+            staticFiles.hostedPath = "/"
+            staticFiles.directory = "/public"
+            staticFiles.precompressMaxSize = precompressMaxSize
+        }
+    }) { _, http ->
+        assumeTrue(Brotli4jLoader.isAvailable())
+        assertThat(http.getFile("/html.html", "gzip"))
+            .extracting({ it.code }, { it.contentEncoding() })
+            .containsExactly(HttpStatus.OK.code, null)
+        assertThat(http.getFile("/html.html", "gzip, br"))
+            .extracting({ it.code }, { it.contentEncoding() })
+            .containsExactly(HttpStatus.OK.code, "br")
+        assertThat(http.getFile("/html.html", "br, gzip"))
+            .extracting({ it.code }, { it.contentEncoding() })
+            .containsExactly(HttpStatus.OK.code, "br")
+        assertThat(http.getFile("/html.html", "deflate, gzip, br"))
+            .extracting({ it.code }, { it.contentEncoding() })
+            .containsExactly(HttpStatus.OK.code, "br")
+    }
+
+    @Test
+    fun `falls back to regular serving when file is larger than precompressMaxSize`() = testStaticFiles({ config ->
+        config.staticFiles.add {
+            it.directory = "public"
+            it.location = Location.CLASSPATH
+            it.precompressMaxSize = 1 // smaller than any test file, so everything falls back
+        }
+    }) { app, http ->
+        val oldSize = getPrecompressCacheSize(app)
+        val res = http.getFile("/html.html", "gzip")
+        assertThat(res.code).describedAs("status").isEqualTo(HttpStatus.OK.code)
+        assertThat(res.body?.string()).describedAs("body").contains("<h1>HTML works</h1>")
+        assertThat(getPrecompressCacheSize(app)).describedAs("nothing should be cached").isEqualTo(oldSize)
+    }
+
+    @Test
+    fun `can set headers after precompressing handler is done`() = testStaticFiles({ config ->
+        config.staticFiles.add {
+            it.directory = "public"
+            it.location = Location.CLASSPATH
+            it.precompressMaxSize = precompressMaxSize
+        }
+    }) { app, http ->
+        app.unsafe.routes.after { it.header("X-After", "true") }
+        val res = http.get("/html.html")
+        assertThat(res.status).describedAs("status").isEqualTo(HttpStatus.OK.code)
+        assertThat(res.headers.getFirst(Header.CONTENT_TYPE)).describedAs("content-type").isEqualTo(ContentType.HTML)
+        assertThat(res.body).describedAs("body").contains("<h1>HTML works</h1>")
+        assertThat(res.headers.getFirst("X-After")).describedAs("after-header").isEqualTo("true")
+    }
+
 
     private fun Response.contentLength() = this.headers.get(Header.CONTENT_LENGTH)
     private fun Response.contentEncoding() = this.headers.get(Header.CONTENT_ENCODING)

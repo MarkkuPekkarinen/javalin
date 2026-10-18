@@ -6,22 +6,28 @@
 
 package io.javalin.plugin.bundled
 
-import io.javalin.Javalin
+import io.javalin.config.JavalinState
 import io.javalin.http.Header.WWW_AUTHENTICATE
 import io.javalin.http.UnauthorizedResponse
 import io.javalin.plugin.Plugin
+import java.util.function.Consumer
 
 /**
  * Adds a filter that runs before every http request.
  * Note: It does not apply to websocket upgrade requests
  */
-class BasicAuthPlugin(private val username: String, private val password: String) : Plugin {
+class BasicAuthPlugin(userConfig: Consumer<Config>) : Plugin<BasicAuthPlugin.Config>(userConfig, Config()) {
 
-    override fun apply(app: Javalin) {
-        app.before { ctx ->
+    class Config {
+        @JvmField var username: String? = null
+        @JvmField var password: String? = null
+    }
+
+    override fun onStart(state: JavalinState) {
+        state.routes.before { ctx ->
             val matched = runCatching { ctx.basicAuthCredentials() }
                 .fold(
-                    onSuccess = { it?.username == username && it.password == password },
+                    onSuccess = { auth -> auth?.username == pluginConfig.username && auth?.password == pluginConfig.password },
                     onFailure = { false }
                 )
 

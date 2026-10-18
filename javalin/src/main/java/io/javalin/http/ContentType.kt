@@ -64,22 +64,28 @@ enum class ContentType(
 
     FONT_OTF("font/otf", false, "otf"),
     FONT_TTF("font/ttf", false, "ttf"),
+    FONT_WOFF("font/woff", false, "woff"),
+    FONT_WOFF2("font/woff2", false, "woff2"),
 
     /* Application */
 
     APPLICATION_OCTET_STREAM("application/octet-stream", false, "bin"),
     APPLICATION_BZ("application/x-bzip", false, "bz"),
     APPLICATION_BZ2("application/x-bzip2", false, "bz2"),
+    APPLICATION_BR("application/brotli", false, "br"),
     APPLICATION_CDN("application/cdn", true, "cdn"),
     APPLICATION_DOC("application/msword", false, "doc"),
     APPLICATION_DOCX("application/vnd.openxmlformats-officedocument.wordprocessingml.document", false, "docx"),
     APPLICATION_EPUB("application/epub+zip", false, "epub"),
     APPLICATION_GZ("application/gzip", false, "gz"),
     APPLICATION_JSON("application/json", true, "json"),
+    APPLICATION_PROBLEM_JSON("application/problem+json", true),
+    APPLICATION_PROBLEM_XML("application/problem+xml", true),
     APPLICATION_MPKG("application/vnd.apple.installer+xml", false, "mpkg"),
     APPLICATION_JAR("application/java-archive", false, "jar"),
     APPLICATION_PDF("application/pdf", true, "pdf"),
     APPLICATION_POM("application/xml", true, "pom"),
+    APPLICATION_XML("application/xml", true),
     APPLICATION_RAR("application/vnd.rar", false, "rar"),
     APPLICATION_SH("application/x-sh", true, "sh"),
     APPLICATION_SWF("application/x-shockwave-flash", false, "swf"),
@@ -104,17 +110,20 @@ enum class ContentType(
         const val CSS = "text/css"
         const val HTML = "text/html"
         const val XML = "text/xml"
+        const val APPLICATION_XML_MIME_TYPE = "application/xml"
         const val OCTET_STREAM = "application/octet-stream"
         const val JAVASCRIPT = "text/javascript"
         const val JSON = "application/json"
+        const val PROBLEM_JSON = "application/problem+json"
+        const val PROBLEM_XML = "application/problem+xml"
         const val FORM_DATA = "multipart/form-data"
 
         @JvmStatic
-        fun getContentType(mimeType: String): ContentType? =
+        fun contentType(mimeType: String): ContentType? =
             values().find { it.mimeType.equals(mimeType, ignoreCase = true) }
 
         @JvmStatic
-        fun getContentTypeByExtension(extension: String): ContentType? =
+        fun contentTypeByExtension(extension: String): ContentType? =
             values().firstOrNull { type ->
                 type.extensions.any {
                     extension.equals(it, ignoreCase = true)
@@ -122,8 +131,8 @@ enum class ContentType(
             }
 
         @JvmStatic
-        fun getMimeTypeByExtension(extensions: String): String? =
-            getContentTypeByExtension(extensions)?.mimeType
+        fun mimeTypeByExtension(extensions: String): String? =
+            contentTypeByExtension(extensions)?.mimeType
 
     }
 

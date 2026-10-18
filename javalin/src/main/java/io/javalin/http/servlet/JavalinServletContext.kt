@@ -8,119 +8,183 @@ package io.javalin.http.servlet
 
 import io.javalin.compression.CompressedOutputStream
 import io.javalin.compression.CompressionStrategy
-import io.javalin.config.JavalinConfig
+import io.javalin.config.AppDataManager
+import io.javalin.config.JavalinState
+import io.javalin.config.Key
+import io.javalin.config.MultipartConfig
 import io.javalin.http.ContentType
 import io.javalin.http.Context
 import io.javalin.http.HandlerType
-import io.javalin.http.HandlerType.AFTER
 import io.javalin.http.Header
-import io.javalin.http.HttpResponseException
 import io.javalin.http.HttpStatus
-import io.javalin.routing.HandlerEntry
+import io.javalin.json.JsonMapper
+import io.javalin.plugin.ContextPlugin
+import io.javalin.plugin.PluginManager
+import io.javalin.router.Endpoint
+import io.javalin.router.Endpoints
+import io.javalin.router.ParsedEndpoint
 import io.javalin.security.BasicAuthCredentials
-import io.javalin.util.JavalinLogger
+import io.javalin.security.RouteRole
+import io.javalin.util.javalinLazy
 import jakarta.servlet.ServletOutputStream
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import java.io.InputStream
 import java.net.URI
-import java.net.URL
 import java.net.URLDecoder
 import java.nio.charset.Charset
 import java.util.*
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.Supplier
+import java.util.stream.Stream
+import kotlin.LazyThreadSafetyMode.PUBLICATION
+import kotlin.LazyThreadSafetyMode.SYNCHRONIZED
 
-class JavalinServletContext(
-    cfg: JavalinConfig,
+data class JavalinServletContextConfig(
+    val appDataManager: AppDataManager,
+    val pluginManager: PluginManager,
+    val compressionStrategy: CompressionStrategy,
+    val requestLoggerEnabled: Boolean,
+    val defaultContentType: String,
+    val jsonMapper: JsonMapper,
+    val strictContentTypes: Boolean,
+    val multipartConfig: MultipartConfig
+) {
+    companion object {
+        fun of(cfg: JavalinState): JavalinServletContextConfig =
+            JavalinServletContextConfig(
+                appDataManager = cfg.appDataManager,
+                pluginManager = cfg.pluginManager,
+                compressionStrategy = cfg.http.compressionStrategy,
+                requestLoggerEnabled = cfg.httpRequestLoggers.isNotEmpty(),
+                defaultContentType = cfg.http.defaultContentType,
+                jsonMapper = cfg.jsonMapper.value,
+                strictContentTypes = cfg.http.strictContentTypes,
+                multipartConfig = cfg.jetty.multipartConfig,
+            )
+    }
+}
+
+open class JavalinServletContext(
+    private val cfg: JavalinServletContextConfig,
     val tasks: Deque<Task> = ArrayDeque(8),
     var exceptionOccurred: Boolean = false,
     val responseWritten: AtomicBoolean = AtomicBoolean(false),
     private var req: HttpServletRequest,
     private val res: HttpServletResponse,
-    private val appAttributes: Map<String, Any> = cfg.pvt.appAttributes,
-    private val compressionStrategy: CompressionStrategy = cfg.pvt.compressionStrategy,
-    private val startTimeNanos: Long? = if (cfg.pvt.requestLogger != null) System.nanoTime() else null,
-    private var handlerType: HandlerType = HandlerType.BEFORE,
-    private var matchedPath: String = "",
-    private var pathParamMap: Map<String, String> = mapOf(),
-    internal var endpointHandlerPath: String = "",
+    private val startTimeNanos: Long? = if (cfg.requestLoggerEnabled) System.nanoTime() else null,
+    private var routeRoles: Set<RouteRole> = emptySet(),
     internal var userFutureSupplier: Supplier<out CompletableFuture<*>>? = null,
     private var resultStream: InputStream? = null,
+    private var minSizeForCompression: Int = cfg.compressionStrategy.defaultMinSizeForCompression,
 ) : Context {
 
+    private val endpoints: Endpoints = Endpoints()
+
+    // State: 0 = UNSET, 1 = TRUE, -1 = FALSE
+    private var cachedWillMatchState: Int = 0
+
+    @JvmSynthetic
+    internal inline fun cachedWillMatch(lookup: () -> Boolean): Boolean {
+        if (cachedWillMatchState == 0) {
+            cachedWillMatchState = if (lookup()) 1 else -1
+        }
+        return cachedWillMatchState == 1
+    }
+
+    private var cachedHttpHandlerValue: Any? = UNSET
+
+    @JvmSynthetic
+    @Suppress("UNCHECKED_CAST")
+    internal inline fun cachedHttpHandler(lookup: () -> ParsedEndpoint?): ParsedEndpoint? {
+        if (cachedHttpHandlerValue === UNSET) {
+            cachedHttpHandlerValue = lookup()
+        }
+        return cachedHttpHandlerValue as ParsedEndpoint?
+    }
+
+    @PublishedApi
+    internal companion object {
+        @PublishedApi
+        internal val UNSET = Any()
+    }
+
     init {
-        contentType(cfg.http.defaultContentType)
+        contentType(cfg.defaultContentType)
     }
 
     fun executionTimeMs(): Float = if (startTimeNanos == null) -1f else (System.nanoTime() - startTimeNanos) / 1000000f
 
-    fun changeBaseRequest(req: HttpServletRequest) = also {
-        this.req = req
-    }
-
-    fun update(handlerEntry: HandlerEntry, requestUri: String) = also {
-        handlerType = handlerEntry.type
-        if (matchedPath != handlerEntry.path) { // if the path has changed, we have to extract path params
-            matchedPath = handlerEntry.path
-            pathParamMap = handlerEntry.extractPathParams(requestUri)
-        }
-        if (handlerType != AFTER) {
-            endpointHandlerPath = handlerEntry.path
-        }
+    fun update(endpoint: Endpoint, pathParams: Map<String, String> = emptyMap()) = also {
+        endpoints.add(endpoint, pathParams)
     }
 
     override fun req(): HttpServletRequest = req
     override fun res(): HttpServletResponse = res
 
-    @Suppress("UNCHECKED_CAST")
-    override fun <T> appAttribute(key: String): T = appAttributes[key] as T
+    override fun <T> appData(key: Key<T>): T = cfg.appDataManager.get(key)
 
-    override fun endpointHandlerPath() = when {
-        handlerType() != HandlerType.BEFORE -> endpointHandlerPath
-        else -> throw IllegalStateException("Cannot access the endpoint handler path in a 'BEFORE' handler")
-    }
+    override fun <T> with(clazz: Class<out ContextPlugin<*, T>>) = cfg.pluginManager.getContextPlugin(clazz).createExtension(this)
 
-    private val characterEncoding by lazy { super.characterEncoding() ?: "UTF-8" }
+    override fun jsonMapper(): JsonMapper = cfg.jsonMapper
+
+    override fun multipartConfig(): MultipartConfig = cfg.multipartConfig
+
+    private val characterEncoding by javalinLazy { super.characterEncoding() ?: "UTF-8" }
     override fun characterEncoding(): String = characterEncoding
 
-    private val cookieStore by lazy { super.cookieStore() }
+    private val cookieStore by javalinLazy(PUBLICATION) { super.cookieStore() }
     override fun cookieStore() = cookieStore
 
-    private val method by lazy { super.method() }
+    private val method by javalinLazy { super.method() }
     override fun method(): HandlerType = method
 
-    override fun handlerType(): HandlerType = handlerType
-    override fun matchedPath(): String = matchedPath
+    override fun endpoints(): Endpoints = endpoints
+
+    override fun endpoint(): Endpoint = endpoints.current()
 
     /** has to be cached, because we can read input stream only once */
-    private val body by lazy { super.bodyAsBytes() }
+    private val body by javalinLazy(SYNCHRONIZED) { super.bodyAsBytes() }
     override fun bodyAsBytes(): ByteArray = body
 
     /** using an additional map lazily so no new objects are created whenever ctx.formParam*() is called */
-    private val formParams by lazy { super.formParamMap() }
+    private val formParams by javalinLazy { super.formParamMap() }
     override fun formParamMap(): Map<String, List<String>> = formParams
 
-    override fun pathParamMap(): Map<String, String> = Collections.unmodifiableMap(pathParamMap)
-    override fun pathParam(key: String): String = pathParamOrThrow(pathParamMap, key, matchedPath)
+    override fun strictContentTypes(): Boolean {
+        return cfg.strictContentTypes
+    }
+
+    override fun pathParamMap(): Map<String, String> =
+        Collections.unmodifiableMap(endpoints.lastPathParams)
+
+    override fun pathParam(key: String): String =
+        pathParamOrThrow(endpoints.lastPathParams, key, endpoints.lastMatchedEndpoint?.path ?: "")
 
     /** using an additional map lazily so no new objects are created whenever ctx.formParam*() is called */
-    private val queryParams by lazy { super.queryParamMap() }
+    private val queryParams by javalinLazy { super.queryParamMap() }
     override fun queryParamMap(): Map<String, List<String>> = queryParams
 
-    internal val outputStreamWrapper = lazy { CompressedOutputStream(compressionStrategy, this) }
+    internal val outputStreamWrapper = javalinLazy(SYNCHRONIZED) {
+        CompressedOutputStream(minSizeForCompression, cfg.compressionStrategy, this)
+    }
+
     override fun outputStream(): ServletOutputStream = outputStreamWrapper.value
+
+    override fun minSizeForCompression(minSizeForCompression: Int) = also {
+        this.minSizeForCompression = minSizeForCompression
+    }
 
     override fun redirect(location: String, status: HttpStatus) {
         header(Header.LOCATION, location).status(status).result("Redirected")
-        if (handlerType() == HandlerType.BEFORE) {
-            tasks.removeIf { it.skipIfExceptionOccurred }
+        if (endpoint().method == HandlerType.BEFORE || endpoint().method == HandlerType.BEFORE_MATCHED) {
+            tasks.removeIf { it.skipOnExceptionAndRedirect }
         }
     }
 
     override fun result(resultStream: InputStream): Context = apply {
-        runCatching { this.resultStream?.close() } // avoid memory leaks for multiple result() calls
+        try { this.resultStream?.close() } catch (_: Exception) {} // avoid memory leaks for multiple result() calls
         this.resultStream = resultStream
     }
 
@@ -131,26 +195,41 @@ class JavalinServletContext(
         userFutureSupplier = future
     }
 
-    override fun skipRemainingHandlers(): Context = also { tasks.clear() }
+    override fun skipRemainingHandlers(): Context = also {
+        tasks.clear()
+    }
 
+    override fun routeRoles() = routeRoles
+    internal fun setRouteRoles(routeRoles: Set<RouteRole>) {
+        this.routeRoles = routeRoles
+    }
+
+    override fun writeJsonStream(stream: Stream<*>) {
+        minSizeForCompression = 0
+        cfg.jsonMapper.writeToOutputStream(stream, this.contentType(ContentType.APPLICATION_JSON).outputStream())
+    }
 }
 
 // this header is semicolon separated, like: "text/html; charset=UTF-8"
 fun getRequestCharset(ctx: Context) = ctx.req().getHeader(Header.CONTENT_TYPE)?.let { value ->
-    value.split(";").find { it.trim().startsWith("charset", ignoreCase = true) }?.let { it.split("=")[1].trim() }
+    value.split(";").find { it.trim().startsWith("charset", ignoreCase = true) }?.let { it.split("=")[1].trim().removeSurrounding("\"") }
 }
 
-fun splitKeyValueStringAndGroupByKey(string: String, charset: String): Map<String, List<String>> {
-    return if (string.isEmpty()) mapOf() else string.split("&").map { it.split("=", limit = 2) }.groupBy(
-        { URLDecoder.decode(it[0], charset) },
-        { if (it.size > 1) URLDecoder.decode(it[1], charset) else "" }
-    ).mapValues { it.value.toList() }
-}
+fun splitKeyValueStringAndGroupByKey(string: String, charset: String): Map<String, List<String>> =
+    if (string.isEmpty()) mapOf() else string.split("&")
+        .map { it.split("=", limit = 2).let { it.get(0) to it.getOrElse(1) { "" } } } // map missing values to empty strings
+        .groupBy({ it.first.urlDecode(charset) }, { it.second.urlDecode(charset) })
+        .mapNotNull { (k, v) -> k?.let { it to v.filterNotNull() } }.toMap()
+
+private fun String.urlDecode(charset: String): String? =
+    try { URLDecoder.decode(this, charset) } catch (_: Exception) { null }
 
 fun pathParamOrThrow(pathParams: Map<String, String?>, key: String, url: String) =
-    pathParams[key.replaceFirst("{", "").replaceFirst("}", "")] ?: throw IllegalArgumentException("'$key' is not a valid path-param for '$url'.")
+    pathParams[key.removePrefix("{").removeSuffix("}")] ?: throw IllegalArgumentException("'$key' is not a valid path-param for '$url'.")
 
-fun urlDecode(s: String): String = URLDecoder.decode(s.replace("+", "%2B"), "UTF-8").replace("%2B", "+")
+fun urlDecode(s: String) =
+    if (!s.any { it == '+' || it == '%' }) s // Fast path: single-pass check, zero allocations
+    else URLDecoder.decode(s.replace("+", "%2B"), "UTF-8") // Slow path: protect literal '+' without corrupting double-encoded '%'
 
 /**
  * @throws IllegalStateException if specified string is not valid Basic auth header
@@ -168,18 +247,8 @@ fun acceptsHtml(ctx: Context) =
 
 fun Context.isLocalhost() = try {
     URI.create(this.url()).toURL().host.let { it == "localhost" || it == "127.0.0.1" }
-} catch (e: Exception) {
+} catch (_: Exception) {
     false
-}
-
-const val MAX_REQUEST_SIZE_KEY = "javalin-max-request-size"
-
-fun Context.throwContentTooLargeIfContentTooLarge() {
-    val maxRequestSize = this.appAttribute<Long>(MAX_REQUEST_SIZE_KEY)
-    if (this.req().contentLength > maxRequestSize) {
-        JavalinLogger.warn("Body greater than max size ($maxRequestSize bytes)")
-        throw HttpResponseException(HttpStatus.CONTENT_TOO_LARGE, HttpStatus.CONTENT_TOO_LARGE.message)
-    }
 }
 
 const val SESSION_CACHE_KEY_PREFIX = "javalin-session-attribute-cache-"
@@ -209,11 +278,11 @@ fun <T> attributeOrCompute(callback: (Context) -> T, key: String, ctx: Context):
     if (ctx.attribute<T>(key) == null) {
         ctx.attribute(key, callback(ctx))
     }
-    return ctx.attribute<T>(key)
+    return ctx.attribute(key)
 }
 
 fun readAndResetStreamIfPossible(stream: InputStream?, charset: Charset) = try {
     stream?.apply { reset() }?.readBytes()?.toString(charset).also { stream?.reset() }
-} catch (e: Exception) {
+} catch (_: Exception) {
     "resultString unavailable (resultStream couldn't be reset)"
 }

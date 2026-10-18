@@ -4,16 +4,24 @@ import io.javalin.http.RequestLogger
 import io.javalin.websocket.WsConfig
 import java.util.function.Consumer
 
-class RequestLoggerConfig(private val pvt: PrivateConfig) {
+/**
+ * Configuration for http requests and websocket loggers.
+ *
+ * @param cfg the parent Javalin Configuration
+ * @see [JavalinState.requestLogger]
+ */
+class RequestLoggerConfig(private val cfg: JavalinState) {
 
+    /** Adds a request logger for HTTP requests. Multiple loggers can be registered and will be invoked in order. */
     fun http(requestLogger: RequestLogger) {
-        pvt.requestLogger = requestLogger
+        cfg.httpRequestLoggers.add(requestLogger)
     }
 
+    /** Adds a request logger for websocket requests. */
     fun ws(ws: Consumer<WsConfig>) {
         val logger = WsConfig()
         ws.accept(logger)
-        pvt.wsLogger = logger
+        cfg.wsRequestLogger = logger
     }
 
 }

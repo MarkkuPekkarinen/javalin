@@ -6,8 +6,8 @@
 
 package io.javalin.plugin.bundled
 
-import io.javalin.event.HandlerMetaInfo
-import io.javalin.event.WsHandlerMetaInfo
+import io.javalin.router.ParsedEndpoint
+import io.javalin.security.Roles
 import io.javalin.util.implementingClassName
 import io.javalin.util.isClass
 import io.javalin.util.isJavaAnonymousLambda
@@ -19,11 +19,12 @@ import io.javalin.util.javaFieldName
 import io.javalin.util.kotlinFieldName
 import io.javalin.util.parentClass
 import io.javalin.util.runMethod
+import io.javalin.websocket.WsHandlerEntry
 
 object RouteOverviewUtil {
 
     @JvmStatic
-    fun createHtmlOverview(handlerInfo: List<HandlerMetaInfo>, wsHandlerInfo: List<WsHandlerMetaInfo>): String {
+    fun createHtmlOverview(handlerInfo: List<ParsedEndpoint>, wsHandlerInfo: List<WsHandlerEntry>): String {
         return """
         <meta name='viewport' content='width=device-width, initial-scale=1'>
         <style>
@@ -118,17 +119,19 @@ object RouteOverviewUtil {
                     </tr>
                 </thead>
                 ${
-            handlerInfo.map { (handlerType, path, handler, roles) ->
-                """
-                    <tr class="method $handlerType">
-                        <td>$handlerType</span></td>
-                        <td>$path</td>
-                        <td><b>${handler.metaInfo}</b></td>
-                        <td>$roles</td>
-                    </tr>
-                    """
-            }.joinToString("")
-        }
+                    handlerInfo
+                        .map { it.endpoint }
+                        .joinToString("") {
+                            """
+                            <tr class="method ${it.method}">
+                                <td>${it.method}</span></td>
+                                <td>${it.path}</td>
+                                <td><b>${it.handler.metaInfo}</b></td>
+                                <td>${it.metadata(Roles::class.java)?.roles ?: emptySet()}</td>
+                            </tr>
+                            """
+                        }
+                }
                 ${
             wsHandlerInfo.map { (wsHandlerType, path, handler, roles) ->
                 """
@@ -163,31 +166,31 @@ object RouteOverviewUtil {
     }
 
     @JvmStatic
-    fun createJsonOverview(handlerInfo: List<HandlerMetaInfo>, wsHandlerInfo: List<WsHandlerMetaInfo>): String {
+    fun createJsonOverview(handlerInfo: List<ParsedEndpoint>, wsHandlerInfo: List<WsHandlerEntry>): String {
         return """
             {
                 "handlers": [
                 ${
-            handlerInfo.map { (handlerType, path, handler, roles) ->
+            handlerInfo.map { it.endpoint }.joinToString(",") {
                 """
                     {
-                        "path": "$path",
-                        "handlerType": "$handlerType",
-                        "metaInfo": "$handler.metaInfo",
-                        "roles": "$roles"
+                        "path": "${it.path}",
+                        "handlerType": "${it.method}",
+                        "metaInfo": "${it.handler.metaInfo}",
+                        "roles": "${it.metadata(Roles::class.java)?.roles ?: emptySet()}"
                     }
                     """
-            }.joinToString(",")
+            }
         }
                 ],
                 "wsHandlers": [
                 ${
-            wsHandlerInfo.map { (wsHandlerType, path, handler, roles) ->
+            wsHandlerInfo.map { (wsHandlerType, path, wsConfig, roles) ->
                 """
                     {
                         "path": "$path",
                         "handlerType": "$wsHandlerType",
-                        "metaInfo": "$handler.metaInfo",
+                        "metaInfo": "${wsConfig.metaInfo}",
                         "roles": "$roles"
                     }
                     """

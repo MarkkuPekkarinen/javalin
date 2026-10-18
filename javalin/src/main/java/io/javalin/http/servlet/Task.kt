@@ -11,8 +11,8 @@ fun interface TaskInitializer<CTX : Context> {
     fun createTasks(submitTask: (SubmitOrder, Task) -> Unit, servlet: JavalinServlet, ctx: CTX, requestUri: String)
 }
 
-data class Task(
-    val skipIfExceptionOccurred: Boolean = true, // tasks in this stage can be aborted by throwing an exception
+class Task(
+    val skipOnExceptionAndRedirect: Boolean = true, // skipped when exception occurs or redirect called from before/beforeMatched
     val handler: TaskHandler<Unit>
 )
 

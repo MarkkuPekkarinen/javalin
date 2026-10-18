@@ -9,7 +9,7 @@ package io.javalin.websocket;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * Holds the different WebSocket handlers for a specific {@link WsEntry} or the WebSocket logger.
+ * Holds the different WebSocket handlers for a specific {@link WsHandlerEntry} or the WebSocket logger.
  */
 public class WsConfig {
 
@@ -18,6 +18,7 @@ public class WsConfig {
     WsBinaryMessageHandler wsBinaryMessageHandler = null;
     WsCloseHandler wsCloseHandler = null;
     WsErrorHandler wsErrorHandler = null;
+    public WsUpgradeLogger wsUpgradeLogger = null;
 
     /**
      * Add a WsConnectHandler to the WsHandler.
@@ -63,5 +64,16 @@ public class WsConfig {
     public void onError(@NotNull WsErrorHandler wsErrorHandler) {
         this.wsErrorHandler = wsErrorHandler;
     }
+
+    /**
+     * Add a WsUpgradeLogger to the WsHandler.
+     * The handler is called when an HTTP request attempts to upgrade to WebSocket.
+     * This is invoked after the upgrade process completes, whether the upgrade succeeds or fails.
+     */
+    public void onUpgrade(@NotNull WsUpgradeLogger wsUpgradeLogger) {
+        this.wsUpgradeLogger = wsUpgradeLogger;
+    }
+
+
 
 }

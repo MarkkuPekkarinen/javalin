@@ -1,13 +1,13 @@
 package io.javalin.vue
 
 import io.javalin.http.Context
-import io.javalin.json.jsonMapper
 import io.javalin.json.toJsonString
+import io.javalin.vue.JavalinVueConfig.Companion.VueConfigKey
 import org.eclipse.jetty.util.URIUtil
 
 internal object VueStateRenderer {
     fun getState(ctx: Context, state: Any?): String {
-        val cfg = ctx.appAttribute<JavalinVueConfig>(JAVALINVUE_CONFIG_KEY)
+        val cfg = ctx.appData(VueConfigKey)
         fun urlEncodedState(state: Any?): String = ctx.jsonMapper()
             .toJsonString(
                 mapOf(
@@ -17,9 +17,11 @@ internal object VueStateRenderer {
             )
             .urlEncodeForJavascript()
 
+        val prototypeOrGlobalConfig = if (cfg.vueInstanceNameInJs != null) "${cfg.vueInstanceNameInJs}.config.globalProperties" else "Vue.prototype"
         return """
             <script nonce="@internalAddNonce">
                 window.JavalinVue = JSON.parse(decodeURIComponent('${urlEncodedState(state)}'))
+                $prototypeOrGlobalConfig.${'$'}javalin = window.JavalinVue
             </script>
         """.trimIndent()
     }

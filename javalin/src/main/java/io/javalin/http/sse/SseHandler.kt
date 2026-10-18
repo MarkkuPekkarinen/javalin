@@ -11,7 +11,7 @@ class SseHandler @JvmOverloads constructor(
 ) : Handler {
 
     override fun handle(ctx: Context) {
-        if (ctx.header(Header.ACCEPT) == "text/event-stream") {
+        if (ctx.header(Header.ACCEPT)?.contains("text/event-stream") == true) {
             ctx.res().apply {
                 status = 200
                 characterEncoding = "UTF-8"
@@ -21,7 +21,9 @@ class SseHandler @JvmOverloads constructor(
                 addHeader(Header.X_ACCEL_BUFFERING, "no") // See https://serverfault.com/a/801629
                 flushBuffer()
             }
-            ctx.async(timeout = timeout) {
+            ctx.async({
+                it.timeout = timeout
+            }) {
                 clientConsumer.accept(SseClient(ctx))
             }
         }

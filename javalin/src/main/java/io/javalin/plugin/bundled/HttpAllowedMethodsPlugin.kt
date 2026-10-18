@@ -6,45 +6,41 @@
 
 package io.javalin.plugin.bundled
 
-import io.javalin.Javalin
-import io.javalin.event.HandlerMetaInfo
-import io.javalin.http.Header
+import io.javalin.config.JavalinState
+import io.javalin.http.HandlerType.OPTIONS
+import io.javalin.http.Header.ACCESS_CONTROL_ALLOW_METHODS
 import io.javalin.plugin.Plugin
-import io.javalin.plugin.PluginLifecycleInit
+import io.javalin.router.Endpoint
 
-class HttpAllowedMethodsPlugin : Plugin, PluginLifecycleInit {
+/**
+ * Plugin adding automatically the Access-Control-Allow-Methods when sending an OPTIONS request to a valid path.
+ *
+ * The Access-Control-Allow-Methods response header specifies one or more methods allowed when accessing
+ * a resource in response to a preflight request.
+ *
+ * e.g.: `Access-Control-Allow-Methods: POST, DELETE`
+ */
+open class HttpAllowedMethodsPlugin : Plugin<Void>() {
 
-    private val endpoints = mutableMapOf<String, MutableSet<HandlerMetaInfo>>()
+    override fun onStart(state: JavalinState) {
+        state.events.serverStarted {
+            state.internalRouter.allHttpHandlers()
+                .asSequence()
+                .map { it.endpoint }
+                .filter { it.method.isHttpMethod }
+                .groupBy({ it.path }, { it.method })
+                .mapValues { (_, handlers) -> (handlers + OPTIONS).toSet() }
+                .forEach { (path, handlers) ->
+                    val allowedMethods = handlers.joinToString(",")
 
-    override fun init(app: Javalin) {
-        app.events {
-            it.handlerAdded { handlerInfo ->
-                addOptionsToList(handlerInfo)
-            }
-        }
-    }
-
-    override fun apply(app: Javalin) {
-        app.events {
-            it.serverStarted {
-                createOptionsEndPoint(app)
-            }
-        }
-    }
-
-    private fun addOptionsToList(handlerMetaInfo: HandlerMetaInfo) {
-        val endpoint = endpoints.getOrPut(handlerMetaInfo.path) { mutableSetOf(handlerMetaInfo) }
-        endpoint.add(handlerMetaInfo)
-    }
-
-    private fun createOptionsEndPoint(app: Javalin) {
-        endpoints.forEach { endpoint ->
-            app.options(endpoint.key) { ctx ->
-                ctx.header(
-                    Header.ACCESS_CONTROL_ALLOW_METHODS,
-                    endpoint.value.joinToString(",") { it.httpMethod.toString() }
-                )
-            }
+                    state.internalRouter.addHttpEndpoint(
+                        Endpoint(
+                            method = OPTIONS,
+                            path = path,
+                            handler = { it.header(ACCESS_CONTROL_ALLOW_METHODS, allowedMethods) }
+                        )
+                    )
+                }
         }
     }
 

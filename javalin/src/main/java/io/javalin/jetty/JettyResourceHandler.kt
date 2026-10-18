@@ -6,113 +6,140 @@
 
 package io.javalin.jetty
 
-import io.javalin.config.PrivateConfig
+import io.javalin.compression.CompressionStrategy
+import io.javalin.http.Context
+import io.javalin.http.Header
 import io.javalin.http.staticfiles.Location
 import io.javalin.http.staticfiles.StaticFileConfig
+import io.javalin.security.RouteRole
 import io.javalin.util.JavalinException
 import io.javalin.util.JavalinLogger
-import jakarta.servlet.http.HttpServletRequest
-import jakarta.servlet.http.HttpServletResponse
-import org.eclipse.jetty.http.MimeTypes
+import org.eclipse.jetty.http.EtagUtils.computeWeakEtag
 import org.eclipse.jetty.io.EofException
-import org.eclipse.jetty.server.HttpConnection
-import org.eclipse.jetty.server.Request
 import org.eclipse.jetty.server.Server
 import org.eclipse.jetty.server.handler.ResourceHandler
-import org.eclipse.jetty.util.URIUtil
-import org.eclipse.jetty.util.resource.EmptyResource
 import org.eclipse.jetty.util.resource.Resource
-import java.io.File
-import java.nio.file.AccessDeniedException
+import org.eclipse.jetty.util.resource.ResourceFactory
+import java.nio.file.Files
+import java.nio.file.Path
+import kotlin.io.path.Path
+import kotlin.io.path.absolute
 import io.javalin.http.staticfiles.ResourceHandler as JavalinResourceHandler
 
-class JettyResourceHandler(val pvt: PrivateConfig) : JavalinResourceHandler {
+class JettyResourceHandler : JavalinResourceHandler {
 
-    fun init() { // we delay the creation of ConfigurableHandler objects to get our logs in order during startup
-        handlers.addAll(lateInitConfigs.map { ConfigurableHandler(it, pvt.server!!) })
-    }
-
-    private val lateInitConfigs = mutableListOf<StaticFileConfig>()
+    private val dummyServer = Server()
     private val handlers = mutableListOf<ConfigurableHandler>()
+    internal val precompressingHandler = JettyPrecompressingResourceHandler()
+    private lateinit var compressionStrategy: CompressionStrategy
+
+    override fun init(compressionStrategy: CompressionStrategy) {
+        this.compressionStrategy = compressionStrategy
+    }
 
     override fun addStaticFileConfig(config: StaticFileConfig): Boolean =
-        if (pvt.server?.isStarted == true) handlers.add(ConfigurableHandler(config, pvt.server!!)) else lateInitConfigs.add(config)
+        handlers.add(ConfigurableHandler(config, dummyServer))
 
-    override fun handle(httpRequest: HttpServletRequest, httpResponse: HttpServletResponse): Boolean {
-        val jettyRequest = HttpConnection.getCurrentConnection().httpChannel.request as Request
-        val target = httpRequest.requestURI.removePrefix(httpRequest.contextPath)
-        handlers.filter { !it.config.skipFileFunction(httpRequest) }.forEach { handler ->
-            try {
-                val resource = handler.getResource(target)
-                if (resource.isFile() || resource.isDirectoryWithWelcomeFile(handler, target)) {
-                    handler.config.headers.forEach { httpResponse.setHeader(it.key, it.value) }
-                    if (handler.config.precompress) {
-                        return if (resource.isDirectoryWithWelcomeFile(handler, target))  // if it's a directory, we need to serve the welcome file
-                            JettyPrecompressingResourceHandler.handle(target, getWelcomeFile(handler, target), httpRequest, httpResponse)
-                        else
-                            JettyPrecompressingResourceHandler.handle(target, resource, httpRequest, httpResponse)
-                    }
-                    httpResponse.contentType = null // Jetty will only set the content-type if it's null
-                    return runCatching { handler.handle(target, jettyRequest, httpRequest, httpResponse) }.isSuccess
-                }
-            } catch (e: Exception) { // it's fine, we'll just 404
-                if (e !is EofException) { // EofException is thrown when the client disconnects, which is fine
-                    JavalinLogger.info("Exception occurred while handling static resource", e)
-                }
+    override fun canHandle(ctx: Context) = findHandler(ctx) != null
+
+    override fun handle(ctx: Context): Boolean {
+        val (handler, resourcePath) = findHandler(ctx) ?: return false
+        try {
+            handler.config.headers.forEach { ctx.header(it.key, it.value) }
+            return if (handler.config.precompressMaxSize > 0) {
+                precompressingHandler.handle(resourcePath, ctx, compressionStrategy, handler)
+            } else {
+                handler.handleResource(resourcePath, ctx)
             }
+        } catch (_: EofException) {
+            return false
+        } catch (e: Exception) {
+            if (e.message?.contains("alias") == true) return false
+            throw e
         }
-        return false
     }
 
-    private fun Resource?.isFile() = this != null && this.exists() && !this.isDirectory
-    private fun getWelcomeFile(handler: ResourceHandler, target: String) =
-        handler.getResource("${target.removeSuffix("/")}/index.html")
+    private fun findHandler(ctx: Context): Pair<ConfigurableHandler, String>? {
+        val target = ctx.req().requestURI.removePrefix(ctx.req().contextPath)
+        return handlers.asSequence()
+            .filterNot { it.config.skipFileFunction?.invoke(ctx.req()) == true }
+            .filter { it.config.hostedPath == "/" || target.startsWith(it.config.hostedPath) }
+            .map { it to if (it.config.hostedPath == "/") target else target.removePrefix(it.config.hostedPath) }
+            .find { (handler, resourcePath) -> handler.getResource(resourcePath) != null }
+    }
 
-    private fun Resource?.isDirectoryWithWelcomeFile(handler: ResourceHandler, target: String) =
-        this != null && this.isDirectory && getWelcomeFile(handler, target)?.exists() == true
+    override fun resourceRouteRoles(ctx: Context): Set<RouteRole> =
+        findHandler(ctx)?.first?.config?.roles ?: emptySet()
 
 }
 
 open class ConfigurableHandler(val config: StaticFileConfig, jettyServer: Server) : ResourceHandler() {
 
     init {
-        JavalinLogger.info("Static file handler added: ${config.refinedToString()}. File system location: '${getResourceBase(config)}'")
-        resourceBase = getResourceBase(config)
+        JavalinLogger.info("Static file handler added: $config. File system location: '${getResourceBase(config)}'")
+        baseResource = getResourceBase(config)
         isDirAllowed = false
         isEtags = true
+        welcomeFiles = listOf("index.html")
         server = jettyServer
-        mimeTypes = MimeTypes()
-        config.mimeTypes.getMapping().forEach { (ext, mimeType) ->
-            mimeTypes.addMimeMapping(ext, mimeType)
-        }
         start()
     }
 
-    override fun getResource(path: String): Resource {
-        val aliasResource by lazy { baseResource!!.addPath(URIUtil.canonicalPath(path)) }
-        return when {
-            config.directory == "META-INF/resources/webjars" ->
-                Resource.newClassPathResource("META-INF/resources$path") ?: EmptyResource.INSTANCE
-
-            config.aliasCheck != null && aliasResource.isAlias ->
-                if (config.aliasCheck?.check(path, aliasResource) == true) aliasResource else throw AccessDeniedException("Failed alias check")
-
-            config.hostedPath == "/" -> super.getResource(path) // same as regular ResourceHandler
-            path.startsWith(config.hostedPath + "/") -> super.getResource(path.removePrefix(config.hostedPath))
-            else -> EmptyResource.INSTANCE // files that don't start with hostedPath should not be accessible
-        }
+    fun handleResource(resourcePath: String, ctx: Context): Boolean {
+        val resource = getResource(resourcePath) ?: return false
+        resolveContentType(resource, resourcePath)?.let { ctx.contentType(it) }
+        if (isEtags && tryHandleAsEtags(resource, ctx)) return true
+        resource.length().takeIf { it > 0 }?.let { ctx.header(Header.CONTENT_LENGTH, it.toString()) }
+        ctx.result(resource.newInputStream())
+        return true
     }
 
-    private fun getResourceBase(config: StaticFileConfig): String {
-        val noSuchDirMessage = "Static resource directory with path: '${config.directory}' does not exist."
+    fun getResource(path: String): Resource? = runCatching {
+        baseResource?.takeIfValid(path) ?: baseResource?.takeIfValid("$path/index.html")
+    }.getOrNull()
+
+    fun Resource.takeIfValid(path: String) =
+        this.resolve(path)?.takeIf { it.exists() && !it.isDirectory && isValidResource(it, path) }
+
+    private fun isValidResource(resource: Resource, path: String): Boolean {
+        if (!resource.isAlias) return true
+        val aliasCheck = config.aliasCheck ?: return false
+        val realPath = resource.realURI?.let { Path.of(it) } ?: return false
+        return aliasCheck.check(path, realPath)
+    }
+
+    internal fun resolveContentType(resource: Resource, fallbackPath: String): String? {
+        // Use the actual resource filename (e.g., "index.html") rather than the request path (e.g., "/")
+        // to resolve content type. This ensures welcome files get correct MIME types based on their extension.
+        val resourceName = resource.fileName ?: resource.name ?: fallbackPath
+        val extension = resourceName.substringAfterLast('.', "").takeIf { it.isNotEmpty() && it != resourceName }
+        return extension?.let { config.mimeTypes.mapping()[it.lowercase()] } ?: mimeTypes.getMimeByExtension(resourceName)
+    }
+
+    internal fun tryHandleAsEtags(resource: Resource, ctx: Context): Boolean {
+        val computedEtag = runCatching { computeWeakEtag(resource) }.getOrNull() ?: return false
+        if (ctx.header(Header.IF_NONE_MATCH) == computedEtag) {
+            ctx.status(304)
+            return true
+        }
+        ctx.header(Header.ETAG, computedEtag)
+        return false
+    }
+
+    private fun getResourceBase(config: StaticFileConfig): Resource {
+        val noSuchDirMessageBuilder: (String) -> String = { "Static resource directory with path: '$it' does not exist." }
         val classpathHint = "Depending on your setup, empty folders might not get copied to classpath."
+
         if (config.location == Location.CLASSPATH) {
-            return Resource.newClassPathResource(config.directory)?.toString() ?: throw JavalinException("$noSuchDirMessage $classpathHint")
+            return ResourceFactory.of(this).newClassLoaderResource(config.directory, false)
+                ?: throw JavalinException("${noSuchDirMessageBuilder(config.directory)} $classpathHint")
         }
-        if (!File(config.directory).exists()) {
-            throw JavalinException(noSuchDirMessage)
+        // Use the absolute path as this aids in debugging
+        val absoluteDirectoryPath = Path(config.directory).absolute().normalize()
+        if (!Files.exists(absoluteDirectoryPath)) {
+            throw JavalinException(noSuchDirMessageBuilder(absoluteDirectoryPath.toString()))
         }
-        return config.directory
+        return ResourceFactory.of(this).newResource(config.directory)
     }
 
 }

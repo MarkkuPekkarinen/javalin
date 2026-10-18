@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Javalin - https://javalin.io
  * Copyright 2017 David Åse
  * Licensed under Apache 2.0: https://github.com/tipsy/javalin/blob/master/LICENSE
@@ -6,6 +6,7 @@
 
 package io.javalin
 
+import io.javalin.plugin.bundled.DevLoggingPlugin
 import io.javalin.testing.HttpUtil
 import io.javalin.testing.TestUtil
 import io.javalin.testing.TestUtil.captureStdOut
@@ -26,7 +27,7 @@ class TestLogging {
 
     @Test
     fun `dev logging works`() {
-        val log = captureStdOut { runTest(Javalin.create { it.plugins.enableDevLogging() }) }
+        val log = captureStdOut { runTest(Javalin.create { it.registerPlugin(DevLoggingPlugin()) }) }
         assertThat(log).contains("JAVALIN REQUEST DEBUG LOG")
         assertThat(log).contains("Hello Blocking World!")
         assertThat(log).contains("Hello Async World!")
@@ -35,9 +36,30 @@ class TestLogging {
     }
 
     @Test
-    fun `dev logging works with inputstreams`() = TestUtil.test(Javalin.create { it.plugins.enableDevLogging() }) { app, http ->
+    fun `dev logging does log static files by default`() {
+        assertThat(testStaticFiles(skipStaticFiles = false)).contains("script.js")
+    }
+
+    @Test
+    fun `can skip static files for dev logging`() {
+        assertThat(testStaticFiles(skipStaticFiles = true)).doesNotContain("script.js")
+    }
+
+    private fun testStaticFiles(skipStaticFiles: Boolean): String {
+        return captureStdOut {
+            TestUtil.test(Javalin.create {
+                it.staticFiles.add("/public")
+                it.registerPlugin(DevLoggingPlugin { it.skipStaticFiles = skipStaticFiles })
+            }) { _, http ->
+                assertThat(http.get("/script.js").body).isEqualTo("document.write(\"<h2>JavaScript works</h2>\");")
+            }
+        }
+    }
+
+    @Test
+    fun `dev logging works with inputstreams`() = TestUtil.test(Javalin.create { it.registerPlugin(DevLoggingPlugin()) }) { app, http ->
         val fileStream = TestLogging::class.java.getResourceAsStream("/public/file")
-        app.get("/") { it.result(fileStream) }
+        app.unsafe.routes.get("/") { it.result(fileStream) }
         val log = captureStdOut { http.getBody("/") }
         assertThat(log).doesNotContain("Stream closed")
         assertThat(log).contains("Body is an InputStream which can't be reset, so it can't be logged")
@@ -54,9 +76,27 @@ class TestLogging {
         assertThat(loggerCalled).isTrue()
     }
 
+    @Test
+    fun `multiple request loggers are all called`() {
+        val logger1Calls = mutableListOf<String>()
+        val logger2Calls = mutableListOf<String>()
+        val logger3Calls = mutableListOf<String>()
+        TestUtil.test(Javalin.create {
+            it.requestLogger.http { ctx, _ -> logger1Calls.add(ctx.path()) }
+            it.requestLogger.http { ctx, _ -> logger2Calls.add(ctx.path()) }
+            it.requestLogger.http { ctx, _ -> logger3Calls.add(ctx.path()) }
+        }) { app, http ->
+            app.unsafe.routes.get("/test") { it.result("Hello") }
+            http.get("/test")
+            assertThat(logger1Calls).containsExactly("/test")
+            assertThat(logger2Calls).containsExactly("/test")
+            assertThat(logger3Calls).containsExactly("/test")
+        }
+    }
+
     private fun runTest(app: Javalin) {
-        app.get("/blocking") { it.result("Hello Blocking World!") }
-        app.get("/async") { ctx ->
+        app.unsafe.routes.get("/blocking") { it.result("Hello Blocking World!") }
+        app.unsafe.routes.get("/async") { ctx ->
             val future = CompletableFuture<String>()
             Executors.newSingleThreadScheduledExecutor().schedule<Boolean>({ future.complete("Hello Async World!") }, 10, TimeUnit.MILLISECONDS)
             ctx.future { future.thenApply { ctx.result(it) } }
@@ -77,7 +117,7 @@ class TestLogging {
             }
         }
         TestUtil.test(bodyLoggingJavalin) { app, http ->
-            app.get("/") { it.result("Hello") }
+            app.unsafe.routes.get("/") { it.result("Hello") }
             http.get("/") // trigger log
             assertThat(loggerLog[0]).isEqualTo("Hello")
             assertThat(loggerLog[1]).isEqualTo("Hello")
@@ -85,8 +125,8 @@ class TestLogging {
     }
 
     @Test
-    fun `debug logging works with binary stream`() = TestUtil.test(Javalin.create { it.plugins.enableDevLogging() }) { app, http ->
-        app.get("/") {
+    fun `debug logging works with binary stream`() = TestUtil.test(Javalin.create { it.registerPlugin(DevLoggingPlugin()) }) { app, http ->
+        app.unsafe.routes.get("/") {
             val imagePath = this::class.java.classLoader.getResource("upload-test/image.png")
             val stream = File(imagePath.toURI()).inputStream()
             it.result(stream)

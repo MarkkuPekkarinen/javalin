@@ -6,50 +6,55 @@
 package io.javalin.config
 
 import io.javalin.Javalin
-import io.javalin.http.servlet.MAX_REQUEST_SIZE_KEY
-import io.javalin.json.JSON_MAPPER_KEY
-import io.javalin.json.JavalinJackson
+import io.javalin.http.servlet.JavalinServletContext
+import io.javalin.http.servlet.TaskInitializer
+import io.javalin.http.staticfiles.ResourceHandler
 import io.javalin.json.JsonMapper
-import io.javalin.rendering.FILE_RENDERER_KEY
+import io.javalin.plugin.Plugin
 import io.javalin.rendering.FileRenderer
-import io.javalin.rendering.NotImplementedRenderer
-import io.javalin.security.AccessManager
-import io.javalin.validation.JavalinValidation.addValidationExceptionMapper
-import io.javalin.vue.JAVALINVUE_CONFIG_KEY
-import io.javalin.vue.JavalinVueConfig
-import java.util.function.Consumer
 
-// this class should be abbreviated `cfg` in the source code.
-// `cfg.pvt` should be accessible, but usage should be discouraged (hence the naming)
-class JavalinConfig {
-    //@formatter:off
-    @JvmField val pvt = PrivateConfig() // this is "private", only use it if you know what you're doing
-    @JvmField val http = HttpConfig()
-    @JvmField val routing = RoutingConfig()
-    @JvmField val jetty = JettyConfig()
-    @JvmField val staticFiles = StaticFilesConfig(pvt)
-    @JvmField val spaRoot = SpaRootConfig(pvt)
-    @JvmField val compression = CompressionConfig(pvt)
-    @JvmField val requestLogger = RequestLoggerConfig(pvt)
-    @JvmField val plugins = PluginConfig()
-    @JvmField val vue = JavalinVueConfig()
-    @JvmField val contextResolver = ContextResolverConfig()
-    @JvmField var showJavalinBanner = true
-    fun accessManager(accessManager: AccessManager) { pvt.accessManager = accessManager }
-    fun jsonMapper(jsonMapper: JsonMapper) { pvt.appAttributes[JSON_MAPPER_KEY] = jsonMapper }
-    fun fileRenderer(fileRenderer: FileRenderer) { pvt.appAttributes[FILE_RENDERER_KEY] = fileRenderer }
-    //@formatter:on
-    companion object {
-        @JvmStatic
-        fun applyUserConfig(app: Javalin, cfg: JavalinConfig, userConfig: Consumer<JavalinConfig>) {
-            addValidationExceptionMapper(app) // add default mapper for validation
-            userConfig.accept(cfg) // apply user config to the default config
-            cfg.plugins.pluginManager.initializePlugins(app)
-            cfg.pvt.appAttributes.computeIfAbsent(JSON_MAPPER_KEY) { JavalinJackson() }
-            cfg.pvt.appAttributes.computeIfAbsent(FILE_RENDERER_KEY) { NotImplementedRenderer() }
-            cfg.pvt.appAttributes.computeIfAbsent(CONTEXT_RESOLVER_KEY) { cfg.contextResolver }
-            cfg.pvt.appAttributes.computeIfAbsent(MAX_REQUEST_SIZE_KEY) { cfg.http.maxRequestSize }
-            cfg.pvt.appAttributes.computeIfAbsent(JAVALINVUE_CONFIG_KEY) { cfg.vue }
-        }
-    }
+/**
+ * Public-facing configuration API exposed to users in [Javalin.create].
+ * This class provides a safe subset of configuration options, hiding internal APIs.
+ *
+ * For advanced/dangerous configuration options, use [Javalin.unsafe] to access [JavalinState] directly.
+ *
+ * @see JavalinState
+ */
+class JavalinConfig internal constructor(
+    /**
+     * Advanced/unsafe API providing access to internal Javalin configuration.
+     * This exposes powerful but potentially dangerous APIs. Use with caution.
+     */
+    @JvmField val unsafe: JavalinState
+) {
+
+    // CORE CONFIGS - HTTP, routing, and server
+    @JvmField val http = unsafe.http
+    @JvmField val router = unsafe.router
+    @JvmField val jetty = unsafe.jetty
+
+    // FEATURE CONFIGS - Static files, SPAs, and routes
+    @JvmField val staticFiles = unsafe.staticFiles
+    @JvmField val spaRoot = unsafe.spaRoot
+    @JvmField val routes = unsafe.routes
+
+    // CROSS-CUTTING CONFIGS - Validation, context resolution, logging, plugins, events
+    @JvmField val validation = unsafe.validation
+    @JvmField val contextResolver = unsafe.contextResolver
+    @JvmField val requestLogger = unsafe.requestLogger
+    @JvmField val bundledPlugins = unsafe.bundledPlugins
+    @JvmField val events = unsafe.events
+
+    // MISC SETTINGS - General application-level settings
+    @JvmField val startup = unsafe.startup
+    @JvmField val concurrency = unsafe.concurrency
+
+    // PUBLIC METHODS - Delegated to unsafe
+    fun requestLifeCycle(vararg requestLifecycle: TaskInitializer<JavalinServletContext>) = unsafe.requestLifeCycle(*requestLifecycle)
+    fun jsonMapper(jsonMapper: JsonMapper) = unsafe.jsonMapper(jsonMapper)
+    fun fileRenderer(fileRenderer: FileRenderer) = unsafe.fileRenderer(fileRenderer)
+    fun resourceHandler(resourceHandler: ResourceHandler) = unsafe.resourceHandler(resourceHandler)
+    fun <CFG> registerPlugin(plugin: Plugin<CFG>) = unsafe.registerPlugin(plugin)
+    fun <T> appData(key: Key<T>, value: T) = unsafe.appData(key, value)
 }

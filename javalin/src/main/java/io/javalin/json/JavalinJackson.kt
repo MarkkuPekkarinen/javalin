@@ -13,15 +13,21 @@ import io.javalin.util.CoreDependency
 import io.javalin.util.DependencyUtil
 import io.javalin.util.JavalinLogger
 import io.javalin.util.Util
+import io.javalin.util.javalinLazy
 import java.io.InputStream
 import java.io.OutputStream
 import java.lang.reflect.Type
 import java.util.function.Consumer
 import java.util.stream.Stream
 
-class JavalinJackson(private var objectMapper: ObjectMapper? = null) : JsonMapper {
+class JavalinJackson(
+    private var objectMapper: ObjectMapper? = null,
+    private val useVirtualThreads: Boolean = false,
+) : JsonMapper {
 
-    val mapper by lazy {
+    private val pipedStreamExecutor: PipedStreamExecutor by javalinLazy { PipedStreamExecutor(useVirtualThreads) }
+
+    private val mapperDelegate: Lazy<Any> = javalinLazy {
         if (!Util.classExists(CoreDependency.JACKSON.testClass)) {
             val message =
                 """|It looks like you don't have an object mapper configured.
@@ -35,8 +41,10 @@ class JavalinJackson(private var objectMapper: ObjectMapper? = null) : JsonMappe
             JavalinLogger.warn(DependencyUtil.wrapInSeparators(message))
             throw InternalServerErrorResponse(message)
         }
-        objectMapper ?: defaultMapper()
+        (objectMapper ?: defaultMapper()) as Any
     }
+
+    val mapper: ObjectMapper get() = mapperDelegate.value as ObjectMapper
 
     override fun toJsonString(obj: Any, type: Type): String = when (obj) {
         is String -> obj // the default mapper treats strings as if they are already JSON
@@ -45,7 +53,7 @@ class JavalinJackson(private var objectMapper: ObjectMapper? = null) : JsonMappe
 
     override fun toJsonStream(obj: Any, type: Type): InputStream = when (obj) {
         is String -> obj.byteInputStream() // the default mapper treats strings as if they are already JSON
-        else -> PipedStreamUtil.getInputStream { pipedOutputStream ->
+        else -> pipedStreamExecutor.getInputStream { pipedOutputStream ->
             mapper.factory.createGenerator(pipedOutputStream).writeObject(obj)
         }
     }

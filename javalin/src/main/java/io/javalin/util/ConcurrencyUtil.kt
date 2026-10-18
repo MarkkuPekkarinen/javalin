@@ -2,24 +2,21 @@ package io.javalin.util
 
 import org.eclipse.jetty.util.thread.QueuedThreadPool
 import org.eclipse.jetty.util.thread.ThreadPool
-import java.lang.invoke.MethodHandle
-import java.lang.invoke.MethodHandles
-import java.lang.invoke.MethodType
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.LazyThreadSafetyMode.NONE
+import kotlin.LazyThreadSafetyMode.SYNCHRONIZED
+import kotlin.concurrent.withLock
 
 object ConcurrencyUtil {
 
-    @Suppress("MemberVisibilityCanBePrivate")
-    // Determines if Javalin should use Loom. By default true, set it to false to disable Loom integration.
-    var useLoom = true
-
     @JvmStatic
-    fun executorService(name: String): ExecutorService = when (useLoom && isLoomAvailable()) {
-        true -> LoomUtil.getExecutorService(name)
+    fun executorService(name: String, useLoom: Boolean): ExecutorService = when (useLoom && isLoomAvailable()) {
+        true -> LoomUtil.executorService(name)
         false -> Executors.newCachedThreadPool(NamedThreadFactory(name))
     }
 
@@ -28,8 +25,8 @@ object ConcurrencyUtil {
         Executors.newSingleThreadScheduledExecutor(NamedThreadFactory(name))
 
     @JvmStatic
-    fun jettyThreadPool(name: String, minThreads: Int, maxThreads: Int): ThreadPool = when (useLoom && isLoomAvailable()) {
-        true -> LoomUtil.getThreadPool(name)
+    fun jettyThreadPool(name: String, minThreads: Int, maxThreads: Int, useLoom: Boolean): ThreadPool = when (useLoom && isLoomAvailable()) {
+        true -> LoomUtil.threadPool(name)
         false -> QueuedThreadPool(maxThreads, minThreads, 60_000).apply { this.name = name }
     }
 
@@ -46,14 +43,14 @@ internal object LoomUtil {
         factoryMethod.invoke(Executors::class.java) as ExecutorService // this *will* throw if preview is not enabled
     }.isSuccess
 
-    fun getExecutorService(name: String): ExecutorService {
+    fun executorService(name: String): ExecutorService {
         require(loomAvailable) { "Your Java version (${System.getProperty("java.version")}) doesn't support Loom" }
         val factoryMethod = Executors::class.java.getMethod("newThreadPerTaskExecutor", ThreadFactory::class.java)
         return factoryMethod.invoke(Executors::class.java, NamedVirtualThreadFactory(name)) as ExecutorService
     }
 
     private class LoomThreadPool(name: String) : ThreadPool {
-        private val executorService = getExecutorService(name)
+        private val executorService = executorService(name)
         override fun join() {}
         override fun getThreads() = 1
         override fun getIdleThreads() = 1
@@ -63,7 +60,7 @@ internal object LoomUtil {
         }
     }
 
-    fun getThreadPool(name: String): ThreadPool =
+    fun threadPool(name: String): ThreadPool =
         LoomThreadPool(name)
 
     fun isLoomThreadPool(threadPool: ThreadPool): Boolean =
@@ -71,43 +68,94 @@ internal object LoomUtil {
 
 }
 
+/**
+ * Loom-friendly [kotlin.Lazy] implementation
+ */
+internal class ReentrantLazy<T : Any?>(initializer: () -> T) : Lazy<T> {
+    private companion object {
+        private object UNINITIALIZED_VALUE
+    }
+
+    private var initializer: (() -> T)? = initializer
+
+    @Volatile
+    private var lock: ReentrantLock? = ReentrantLock()
+
+    @Volatile
+    private var _value: Any? = UNINITIALIZED_VALUE
+
+    override val value: T
+        get() {
+            lock?.withLock {
+                if (_value === UNINITIALIZED_VALUE) {
+                    this._value = initializer!!.invoke()
+                    this.lock = null
+                    this.initializer = null
+                }
+            }
+            @Suppress("UNCHECKED_CAST")
+            return _value as T
+        }
+
+    override fun isInitialized(): Boolean = _value !== UNINITIALIZED_VALUE
+}
+
+
+/**
+ * Loom-friendly [kotlin.lazy] implementation
+ *
+ * By default, [kotlin.lazy] uses [SynchronizedLazyImpl] which is not Loom-friendly.
+ * We instead use LazyThreadSafetyMode = NONE by default, and use [ReentrantLazy] when
+ * [LazyThreadSafetyMode.SYNCHRONIZED] is requested.
+ */
+fun <T : Any?> javalinLazy(
+    threadSafetyMode: LazyThreadSafetyMode = NONE,
+    initializer: () -> T
+): Lazy<T> = when (threadSafetyMode) {
+    SYNCHRONIZED -> if (ConcurrencyUtil.isLoomAvailable()) ReentrantLazy(initializer) else lazy(SYNCHRONIZED, initializer)
+    else -> lazy(threadSafetyMode, initializer)
+}
+
 open class NamedThreadFactory(protected val prefix: String) : ThreadFactory {
     protected val group: ThreadGroup? = Thread.currentThread().threadGroup
     protected val threadCount = AtomicInteger(0)
 
     override fun newThread(runnable: Runnable): Thread =
-        Thread(group, runnable, "$prefix-${threadCount.getAndIncrement()}", 0)
+        // Daemon so these internal pools (async, piped-streaming, ws-ping, rate-limit)
+        // don't keep the JVM alive after stop(). Matches the Loom path, whose virtual
+        // threads are always daemon. The Jetty server pool does not use this factory.
+        Thread(group, runnable, "$prefix-${threadCount.getAndIncrement()}", 0).apply { isDaemon = true }
 }
 
 open class NamedVirtualThreadFactory(prefix: String) : NamedThreadFactory(prefix) {
-    override fun newThread(runnable: Runnable): Thread = ReflectiveVirtualThreadBuilder()
+    override fun newThread(runnable: Runnable): Thread = VirtualThreadBuilder.create()
         .name("$prefix-Virtual-${threadCount.getAndIncrement()}")
         .unstarted(runnable)
 }
 
-open class ReflectiveVirtualThreadBuilder {
+object VirtualThreadBuilder {
+    private val builderClass = Class.forName("java.lang.Thread\$Builder\$OfVirtual")
+    private val nameMethod = builderClass.getMethod("name", String::class.java)
+    private val unstartedMethod = builderClass.getMethod("unstarted", Runnable::class.java)
+    private val ofVirtualMethod = Thread::class.java.getMethod("ofVirtual")
 
-    protected companion object {
-        val OF_VIRTUAL: MethodHandle
-        val NAME: MethodHandle
-        val UNSTARTED: MethodHandle
+    interface Builder {
+        fun name(name: String): Builder
+        fun unstarted(runnable: Runnable): Thread
+    }
 
-        init {
-            val builderClass = Class.forName("java.lang.Thread\$Builder\$OfVirtual")
-            val handles = MethodHandles.publicLookup()
-            OF_VIRTUAL = handles.findStatic(Thread::class.java, "ofVirtual", MethodType.methodType(builderClass))
-            NAME = handles.findVirtual(builderClass, "name", MethodType.methodType(builderClass, String::class.java))
-            UNSTARTED = handles.findVirtual(builderClass, "unstarted", MethodType.methodType(Thread::class.java, Runnable::class.java))
+    private class BuilderImpl : Builder {
+        private val ofVirtual = ofVirtualMethod.invoke(null)
+
+        override fun name(name: String): Builder {
+            nameMethod.invoke(ofVirtual, name)
+            return this
+        }
+
+        override fun unstarted(runnable: Runnable): Thread {
+            return unstartedMethod.invoke(ofVirtual, runnable) as Thread
         }
     }
 
-    protected var virtualBuilder: Any = OF_VIRTUAL.invoke()
-
-    fun name(name: String): ReflectiveVirtualThreadBuilder = also {
-        this.virtualBuilder = NAME.invoke(virtualBuilder, name)
-    }
-
-    fun unstarted(runnable: Runnable): Thread =
-        UNSTARTED.invoke(virtualBuilder, runnable) as Thread
-
+    fun create(): Builder = BuilderImpl()
 }

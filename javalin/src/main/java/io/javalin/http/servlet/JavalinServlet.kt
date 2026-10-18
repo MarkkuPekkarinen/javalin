@@ -6,28 +6,45 @@
 
 package io.javalin.http.servlet
 
-import io.javalin.config.JavalinConfig
+import io.javalin.config.JavalinState
+import io.javalin.http.Context
 import io.javalin.http.HttpStatus.INTERNAL_SERVER_ERROR
 import io.javalin.http.HttpStatus.REQUEST_TIMEOUT
 import io.javalin.http.servlet.SubmitOrder.FIRST
 import io.javalin.http.servlet.SubmitOrder.LAST
-import io.javalin.http.util.AsyncUtil.addListener
 import io.javalin.http.util.AsyncUtil.isAsync
+import io.javalin.http.util.AsyncUtil.newAsyncListener
 import io.javalin.http.util.ETagGenerator
-import io.javalin.routing.PathMatcher
+import io.javalin.util.javalinLazy
 import jakarta.servlet.http.HttpServlet
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 
-class JavalinServlet(val cfg: JavalinConfig) : HttpServlet() {
+/**
+ * Handles HTTP requests with sync/async support.
+ *
+ * Threading: Sync requests run on the servlet thread. Async requests release the servlet thread
+ * after ctx.future{} and resume on the future's completion thread. Timeouts fire on Jetty's thread.
+ * Tasks execute sequentially on one thread at a time; [JavalinServletContext.responseWritten]
+ * guards against the rare timeout-vs-completion race where both threads try to finalize the response.
+ */
+class JavalinServlet(val cfg: JavalinState) : HttpServlet() {
 
-    val matcher = PathMatcher()
-    val exceptionMapper = ExceptionMapper(cfg)
-    val errorMapper = ErrorMapper()
+    val requestLifecycle = cfg.servletRequestLifecycle.toList()
+    val router = cfg.internalRouter
+    private val servletContextConfig by javalinLazy { JavalinServletContextConfig.of(cfg) }
 
     override fun service(request: HttpServletRequest, response: HttpServletResponse) {
+        handle(JavalinServletRequest(request), response)
+    }
+
+    fun handle(request: HttpServletRequest, response: HttpServletResponse): Context? {
         try {
-            val ctx = JavalinServletContext(req = request, res = response, cfg = cfg)
+            val ctx = JavalinServletContext(
+                cfg = servletContextConfig,
+                req = request,
+                res = response
+            )
 
             val submitTask: (SubmitOrder, Task) -> Unit = { order, task ->
                 when (order) {
@@ -36,18 +53,20 @@ class JavalinServlet(val cfg: JavalinConfig) : HttpServlet() {
                 }
             }
             val requestUri = ctx.path().removePrefix(ctx.contextPath())
-            cfg.pvt.servletRequestLifecycle.forEach { it.createTasks(submitTask, this, ctx, requestUri) }
+            requestLifecycle.forEach { it.createTasks(submitTask, this, ctx, requestUri) }
 
             ctx.handleSync()
+            return ctx
         } catch (throwable: Throwable) {
-            exceptionMapper.handleUnexpectedThrowable(response, throwable)
+            router.handleHttpUnexpectedThrowable(response, throwable)
+            return null
         }
     }
 
     private fun JavalinServletContext.handleSync() {
         while (userFutureSupplier == null && tasks.isNotEmpty()) {
             val task = tasks.poll()
-            if (exceptionOccurred && task.skipIfExceptionOccurred) {
+            if (exceptionOccurred && task.skipOnExceptionAndRedirect) {
                 continue
             }
             handleTask(task.handler)
@@ -63,24 +82,25 @@ class JavalinServlet(val cfg: JavalinConfig) : HttpServlet() {
         if (!isAsync()) startAsyncAndAddDefaultTimeoutListeners() // start async if not already started
 
         val userFuture = handleTask { userFutureSupplier.get() } ?: return handleSync() // get future from supplier or handle error
-        req().asyncContext.addListener(onTimeout = { userFuture.cancel(true) }) // cancel user's future if timeout occurs
+        req().asyncContext.addListener(newAsyncListener(onTimeout = { userFuture.cancel(true) })) // cancel user's future if timeout occurs
 
         userFuture
             .thenApply { handleSync() }
             .exceptionally {
-                exceptionMapper.handle(this, it)
-                writeResponseAndLog()
+                exceptionOccurred = true
+                router.handleHttpException(this, it)
+                handleSync() // resume normal request flow (after-handlers, request-logging)
             }
     }
 
     private fun JavalinServletContext.startAsyncAndAddDefaultTimeoutListeners() = req().startAsync().also {
         it.timeout = cfg.http.asyncTimeout
-        it.addListener(onTimeout = { // a timeout avoids the pipeline - we need to handle it manually + it's not thread-safe
+        it.addListener(newAsyncListener(onTimeout = { // a timeout avoids the pipeline - we need to handle it manually + it's not thread-safe
             status(INTERNAL_SERVER_ERROR) // default error handling
-            errorMapper.handle(statusCode(), this) // user defined error handling
+            router.handleHttpError(statusCode(), this) // user defined error handling
             if (resultInputStream() == null) result(REQUEST_TIMEOUT.message) // write default response only if handler didn't do anything
-            writeResponseAndLog()
-        })
+            handleSync() // resume normal request flow (after-handlers, request-logging)
+        }))
     }
 
     private fun <R> JavalinServletContext.handleTask(handler: TaskHandler<R>): R? =
@@ -89,7 +109,7 @@ class JavalinServlet(val cfg: JavalinConfig) : HttpServlet() {
         } catch (throwable: Throwable) {
             exceptionOccurred = true
             userFutureSupplier = null
-            tasks.offerFirst(Task(skipIfExceptionOccurred = false) { exceptionMapper.handle(this, throwable) })
+            tasks.offerFirst(Task(skipOnExceptionAndRedirect = false) { router.handleHttpException(this, throwable) })
             null
         }
 
@@ -98,11 +118,12 @@ class JavalinServlet(val cfg: JavalinConfig) : HttpServlet() {
             if (responseWritten.getAndSet(true)) return // prevent writing more than once, it's required because timeout listener can terminate the flow at any time
             resultInputStream()?.use { resultStream ->
                 val etagWritten = ETagGenerator.tryWriteEtagAndClose(cfg.http.generateEtags, this, resultStream)
-                if (!etagWritten) resultStream.copyTo(outputStream(), 4096)
+                if (!etagWritten) resultStream.copyTo(outputStream(), cfg.http.responseBufferSize ?: 32_768) // default should never happen, we add a fallback just in case
             }
-            cfg.pvt.requestLogger?.handle(this, executionTimeMs())
+            val executionTime = executionTimeMs()
+            cfg.httpRequestLoggers.forEach { it.handle(this, executionTime) }
         } catch (throwable: Throwable) {
-            exceptionMapper.handleUnexpectedThrowable(res(), throwable) // handle any unexpected error, e.g. write failure
+            router.handleHttpUnexpectedThrowable(res(), throwable) // handle any unexpected error, e.g. write failure
         } finally {
             if (outputStreamWrapper.isInitialized()) outputStream().close() // close initialized output wrappers
             if (isAsync()) req().asyncContext.complete() // guarantee completion of async context to eliminate the possibility of hanging connections

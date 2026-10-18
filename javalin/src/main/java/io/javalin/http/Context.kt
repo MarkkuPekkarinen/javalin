@@ -6,7 +6,10 @@
 
 package io.javalin.http
 
-import io.javalin.config.contextResolver
+import io.javalin.config.ContextResolverConfig.Companion.ContextResolverKey
+import io.javalin.config.Key
+import io.javalin.http.ContentType.APPLICATION_JSON
+import io.javalin.http.servlet.MaxRequestSize
 import io.javalin.http.servlet.attributeOrCompute
 import io.javalin.http.servlet.cacheAndSetSessionAttribute
 import io.javalin.http.servlet.cachedSessionAttributeOrCompute
@@ -15,16 +18,21 @@ import io.javalin.http.servlet.getCachedRequestAttributeOrSessionAttribute
 import io.javalin.http.servlet.getRequestCharset
 import io.javalin.http.servlet.readAndResetStreamIfPossible
 import io.javalin.http.servlet.splitKeyValueStringAndGroupByKey
-import io.javalin.http.servlet.throwContentTooLargeIfContentTooLarge
-import io.javalin.http.util.AsyncUtil
+import io.javalin.http.util.AsyncExecutor.Companion.AsyncExecutorKey
+import io.javalin.http.util.AsyncTaskConfig
 import io.javalin.http.util.CookieStore
 import io.javalin.http.util.MultipartUtil
 import io.javalin.http.util.SeekableWriter
-import io.javalin.json.jsonMapper
-import io.javalin.rendering.fileRenderer
+import io.javalin.json.JsonMapper
+import io.javalin.plugin.ContextPlugin
+import io.javalin.rendering.FileRenderer.Companion.FileRendererKey
+import io.javalin.router.Endpoint
+import io.javalin.router.Endpoints
 import io.javalin.security.BasicAuthCredentials
+import io.javalin.security.RouteRole
 import io.javalin.util.function.ThrowingRunnable
 import io.javalin.validation.BodyValidator
+import io.javalin.validation.Validation.Companion.ValidationKey
 import io.javalin.validation.Validator
 import jakarta.servlet.ServletOutputStream
 import jakarta.servlet.http.HttpServletRequest
@@ -34,10 +42,10 @@ import java.lang.reflect.Type
 import java.nio.charset.Charset
 import java.util.*
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.TimeoutException
+import java.util.function.Consumer
 import java.util.function.Supplier
 import java.util.stream.Stream
+import kotlin.reflect.KClass
 import kotlin.reflect.javaType
 import kotlin.reflect.typeOf
 
@@ -55,17 +63,29 @@ interface Context {
     /** Servlet response */
     fun res(): HttpServletResponse
 
-    /** Gets an attribute from the Javalin instance serving the request */
-    fun <T> appAttribute(key: String): T
+    /** Gets all endpoints visited during this request (in order) */
+    fun endpoints(): Endpoints
 
-    /** Gets the handler type of the current handler */
-    fun handlerType(): HandlerType
+    /** Gets the matched Endpoint */
+    fun endpoint(): Endpoint
 
-    /** Gets the path that was used to match request (also includes before/after paths) */
-    fun matchedPath(): String
+    ///////////////////////////////////////////////////////////////
+    // Config-ish methods
+    ///////////////////////////////////////////////////////////////
 
-    /** Gets the endpoint path that was used to match request (null in before, available in endpoint/after) */
-    fun endpointHandlerPath(): String
+    /** Get app data by key */
+    fun <T> appData(key: Key<T>): T
+
+    /** Get configured [JsonMapper] */
+    fun jsonMapper(): JsonMapper
+
+    ///////////////////////////////////////////////////////////////
+    // Plugin-related methods
+    ///////////////////////////////////////////////////////////////
+
+    /** Fetch the context extension for a plugin */
+    fun <T> with(clazz: Class<out ContextPlugin<*, T>>): T
+    fun <T> with(clazz: KClass<out ContextPlugin<*, T>>): T = with(clazz.java)
 
     ///////////////////////////////////////////////////////////////
     // Request-ish methods
@@ -77,8 +97,8 @@ interface Context {
     /** Gets the request content type, or null. */
     fun contentType(): String? = req().contentType
 
-    /** Gets the request method. */
-    fun method(): HandlerType = HandlerType.findByName(header(Header.X_HTTP_METHOD_OVERRIDE) ?: req().method)
+    /** Gets the request method. Unrecognized methods resolve to a non-matching [HandlerType] (404) rather than throwing. */
+    fun method(): HandlerType = HandlerType.findOrDefault(header(Header.X_HTTP_METHOD_OVERRIDE) ?: req().method)
 
     /** Gets the request path. */
     fun path(): String = req().requestURI
@@ -99,63 +119,84 @@ interface Context {
     fun characterEncoding(): String? = getRequestCharset(this)
 
     /** Gets the request url. */
-    fun url(): String = contextResolver().url.invoke(this)
+    fun url(): String = appData(ContextResolverKey).url.invoke(this)
 
     /** Gets the full request url, including query string (if present) */
-    fun fullUrl(): String = contextResolver().fullUrl.invoke(this)
+    fun fullUrl(): String = appData(ContextResolverKey).fullUrl.invoke(this)
 
     /** Gets the request scheme. */
-    fun scheme(): String = contextResolver().scheme.invoke(this)
+    fun scheme(): String = appData(ContextResolverKey).scheme.invoke(this)
 
     /** Gets the request host, or null. */
-    fun host(): String? = contextResolver().host.invoke(this)
+    fun host(): String? = appData(ContextResolverKey).host.invoke(this)
 
     /** Gets the request ip. */
-    fun ip(): String = contextResolver().ip.invoke(this)
+    fun ip(): String = appData(ContextResolverKey).ip.invoke(this)
 
     /** Gets the request body as a [String]. */
     fun body(): String = bodyAsBytes().toString(Charset.forName(characterEncoding() ?: "UTF-8"))
 
     /**
      * Gets the request body as a [ByteArray].
-     * Calling this method returns the body as a [ByteArray]. If [io.javalin.config.JavalinConfig.maxRequestSize]
+     * Calling this method returns the body as a [ByteArray]. If [io.javalin.config.HttpConfig.maxRequestSize]
      * is set and body is bigger than its value, a [io.javalin.http.HttpResponseException] is throw,
      * with status 413 CONTENT_TOO_LARGE.
      */
     fun bodyAsBytes(): ByteArray {
-        this.throwContentTooLargeIfContentTooLarge()
-        return req().inputStream.readBytes()
+        val maxRequestSize = appData(MaxRequestSize.MaxRequestSizeKey)
+        return MaxRequestSize.readBytesWithLimit(req().inputStream, maxRequestSize)
     }
 
     /** Maps a JSON body to a Java/Kotlin class using the registered [io.javalin.json.JsonMapper] */
-    fun <T> bodyAsClass(type: Type): T = jsonMapper().fromJsonString(body(), type)
+    fun <T> bodyAsClass(type: Type): T =  when {
+        isJson() || !strictContentTypes() -> jsonMapper().fromJsonString(body(), type)
+        else -> throw BadRequestResponse("Content-Type is not application/json")
+    }
 
     /** Maps a JSON body to a Java/Kotlin class using the registered [io.javalin.json.JsonMapper] */
     fun <T> bodyAsClass(clazz: Class<T>): T = bodyAsClass(type = clazz as Type)
 
     /** Maps a JSON body to a Java/Kotlin class using the registered [io.javalin.json.JsonMapper] */
-    fun <T> bodyStreamAsClass(type: Type): T = jsonMapper().fromJsonStream(req().inputStream, type)
+    fun <T> bodyStreamAsClass(type: Type): T = when {
+        isJson() || !strictContentTypes() -> jsonMapper().fromJsonStream(req().inputStream, type)
+        else -> throw BadRequestResponse("Content-Type is not application/json")
+    }
 
     /** Gets the underlying [InputStream] for the request body */
     fun bodyInputStream(): InputStream = req().inputStream
 
     /** Creates a typed [BodyValidator] for the body() value */
-    fun <T> bodyValidator(clazz: Class<T>) = BodyValidator(body(), clazz, this.jsonMapper())
+    fun <T> bodyValidator(clazz: Class<T>): BodyValidator<T?> = BodyValidator(body(), clazz) { bodyAsClass(clazz) }
 
     /** Gets a form param if it exists, else null */
     fun formParam(key: String): String? = formParams(key).firstOrNull()
 
     /** Creates a typed [Validator] for the formParam() value */
-    fun <T> formParamAsClass(key: String, clazz: Class<T>) = Validator.create(clazz, formParam(key), key)
+    fun <T> formParamAsClass(key: String, clazz: Class<T>) = appData(ValidationKey).validator(key, clazz, formParam(key))
 
     /** Gets a list of form params for the specified key, or empty list. */
     fun formParams(key: String): List<String> = formParamMap()[key] ?: emptyList()
 
+    /** Gets a list of form params for the specified key, or empty list. */
+    fun <T : Any> formParamsAsClass(key: String, clazz: Class<T>): Validator<List<T>?> {
+        val params = (formParamMap()[key] ?: emptyList()).map {
+            appData(ValidationKey).validator(key, clazz, it).required().get()
+        }
+
+        return appData(ValidationKey).validator(key, params)
+    }
+
     /** Gets a map with all the form param keys and values. */
     fun formParamMap(): Map<String, List<String>> = when {
-        isMultipartFormData() -> MultipartUtil.getFieldMap(req())
-        else -> splitKeyValueStringAndGroupByKey(body(), characterEncoding() ?: "UTF-8")
+        isMultipartFormData() -> MultipartUtil.fieldMap(req(), multipartConfig())
+        isFormUrlencoded() || !strictContentTypes() -> splitKeyValueStringAndGroupByKey(body(), characterEncoding() ?: "UTF-8")
+        else -> mapOf()
     }
+
+    /** Gets the multipart configuration for this context */
+    fun multipartConfig(): io.javalin.config.MultipartConfig
+
+    fun strictContentTypes(): Boolean
 
     /**
      * Gets a path param by name (ex: pathParam("param").
@@ -167,7 +208,7 @@ interface Context {
     fun pathParam(key: String): String
 
     /** Creates a typed [Validator] for the pathParam() value */
-    fun <T> pathParamAsClass(key: String, clazz: Class<T>) = Validator.create(clazz, pathParam(key), key)
+    fun <T> pathParamAsClass(key: String, clazz: Class<T>) = appData(ValidationKey).validator(key, clazz, pathParam(key))
 
     /** Gets a map of all the [pathParamAsClass] keys and values. */
     fun pathParamMap(): Map<String, String>
@@ -176,10 +217,19 @@ interface Context {
     fun queryParam(key: String): String? = queryParams(key).firstOrNull()
 
     /** Creates a typed [Validator] for the queryParam() value */
-    fun <T> queryParamAsClass(key: String, clazz: Class<T>) = Validator.create(clazz, queryParam(key), key)
+    fun <T> queryParamAsClass(key: String, clazz: Class<T>) = appData(ValidationKey).validator(key, clazz, queryParam(key))
 
     /** Gets a list of query params for the specified key, or empty list. */
     fun queryParams(key: String): List<String> = queryParamMap()[key] ?: emptyList()
+
+    /** Gets a list of query params for the specified key, or empty list. */
+    fun <T : Any> queryParamsAsClass(key: String, clazz: Class<T>): Validator<List<T>?> {
+        val params = (queryParamMap()[key] ?: emptyList()).map {
+            appData(ValidationKey).validator(key, clazz, it).required().get()
+        }
+
+        return appData(ValidationKey).validator(key, params)
+    }
 
     /** Gets a map with all the query param keys and values. */
     fun queryParamMap(): Map<String, List<String>> = splitKeyValueStringAndGroupByKey(queryString() ?: "", characterEncoding() ?: "UTF-8")
@@ -195,7 +245,7 @@ interface Context {
     fun <T> sessionAttribute(key: String): T? = req().getSession(false)?.getAttribute(key) as? T
 
     /** Get session attribute, and set value to null */
-    fun <T> consumeSessionAttribute(key: String) = sessionAttribute<T?>(key).also { this.sessionAttribute(key, null) }
+    fun <T> consumeSessionAttribute(key: String): T? = sessionAttribute<T?>(key).also { this.sessionAttribute(key, null) }
 
     /** Sets an attribute for the user session, and caches it on the request */
     fun cachedSessionAttribute(key: String, value: Any?) = cacheAndSetSessionAttribute(key, value, req())
@@ -226,7 +276,7 @@ interface Context {
     fun cookieStore(): CookieStore = CookieStore(this)
 
     /** Gets a request cookie by name, or null. */
-    fun cookie(name: String): String? = req().getCookie(name)
+    fun cookie(name: String): String? = req().cookies?.find { it.name == name }?.value
 
     /** Gets a map with all the cookie keys and values on the request(). */
     fun cookieMap(): Map<String, String> = req().cookies?.associate { it.name to it.value } ?: emptyMap()
@@ -235,7 +285,7 @@ interface Context {
     fun header(header: String): String? = req().getHeader(header)
 
     /** Creates a typed [Validator] for the header() value */
-    fun <T> headerAsClass(header: String, clazz: Class<T>): Validator<T> = Validator.create(clazz, header(header), header)
+    fun <T> headerAsClass(header: String, clazz: Class<T>) = appData(ValidationKey).validator(header, clazz, header(header))
 
     /** Gets a map with all the header keys and values on the request(). */
     fun headerMap(): Map<String, String> = req().headerNames.asSequence().associateWith { header(it)!! }
@@ -250,23 +300,29 @@ interface Context {
     fun basicAuthCredentials(): BasicAuthCredentials? = getBasicAuthCredentials(header(Header.AUTHORIZATION))
 
     /** Returns true if request is multipart. */
-    fun isMultipart(): Boolean = header(Header.CONTENT_TYPE)?.lowercase(Locale.ROOT)?.contains("multipart/") == true
+    fun isMultipart(): Boolean = header(Header.CONTENT_TYPE)?.startsWith("multipart/", ignoreCase = true) == true
 
     /** Returns true if request is multipart/form-data. */
-    fun isMultipartFormData(): Boolean = header(Header.CONTENT_TYPE)?.lowercase(Locale.ROOT)?.contains("multipart/form-data") == true
+    fun isMultipartFormData(): Boolean = header(Header.CONTENT_TYPE)?.startsWith("multipart/form-data", ignoreCase = true) == true
+
+    /** Returns true if request is application/x-www-form-urlencoded. */
+    fun isFormUrlencoded(): Boolean = header(Header.CONTENT_TYPE)?.startsWith("application/x-www-form-urlencoded", ignoreCase = true) == true
+
+    /** Returns true if request is application/json. */
+    fun isJson(): Boolean = header(Header.CONTENT_TYPE)?.startsWith("application/json", ignoreCase = true) == true
 
     /** Gets first [UploadedFile] for the specified name, or null. */
     fun uploadedFile(fileName: String): UploadedFile? = uploadedFiles(fileName).firstOrNull()
 
     /** Gets a list of [UploadedFile]s for the specified name, or empty list. */
     fun uploadedFiles(fileName: String): List<UploadedFile> = when {
-        isMultipartFormData() -> MultipartUtil.getUploadedFiles(req(), fileName)
+        isMultipartFormData() -> MultipartUtil.uploadedFiles(req(), fileName, multipartConfig())
         else -> listOf()
     }
 
     /** Gets a list of [UploadedFile]s, or empty list. */
     fun uploadedFiles(): List<UploadedFile> = when {
-        isMultipartFormData() -> MultipartUtil.getUploadedFiles(req())
+        isMultipartFormData() -> MultipartUtil.uploadedFiles(req(), multipartConfig())
         else -> listOf()
     }
 
@@ -277,7 +333,7 @@ interface Context {
      * If called on a non-multipart request this returns an empty map
      */
     fun uploadedFileMap(): Map<String, List<UploadedFile>> = when {
-        isMultipartFormData() -> MultipartUtil.getUploadedFileMap(req())
+        isMultipartFormData() -> MultipartUtil.uploadedFileMap(req(), multipartConfig())
         else -> emptyMap()
     }
 
@@ -286,19 +342,34 @@ interface Context {
     ///////////////////////////////////////////////////////////////
 
     /** Gets the current response [Charset]. */
-    fun responseCharset(): Charset = runCatching { Charset.forName(res().characterEncoding) }.getOrElse { Charset.defaultCharset() }
+    fun responseCharset(): Charset = try { Charset.forName(res().characterEncoding) } catch (_: Exception) { Charset.defaultCharset() }
 
     /**
-     * Gets output-stream you can write to.
-     * This stream by default uses compression specified in Javalin configuration,
-     * if you're looking for raw, uncompressed servlet's output-stream, use `ctx.res().outputStream`.
+     * Gets the output stream you can write to.
+     * This stream by default uses compression specified in the Javalin configuration.
+     * If you're looking for the servlet's raw, uncompressed output stream, use `ctx.res().outputStream`.
      * @see [HttpServletResponse.getOutputStream]
      */
     fun outputStream(): ServletOutputStream
 
     /**
+     * The output stream returned by outputStream() will use compression (as specified in Javalin configuration), but
+     * compression will happen only if the first write to the output stream is larger than `minSizeForCompression`.
+     * Calling this function with a value of zero will cause compression to always be used.
+     * The default value is set to the value of [io.javalin.compression.CompressionStrategy.defaultMinSizeForCompression].
+     * This function must be called before calling [outputStream] for the first time.
+     */
+    fun minSizeForCompression(minSizeForCompression: Int): Context
+
+    /**
+     * Disables compression for the response output stream.
+     * Equivalent to calling [minSizeForCompression] with [Integer.MAX_VALUE].
+     */
+    fun disableCompression(): Context = minSizeForCompression(Int.MAX_VALUE)
+
+    /**
      * Writes the specified inputStream as a seekable stream.
-     * You can change this default in [io.javalin.config.JavalinConfig].
+     * You can change this default in [io.javalin.config.JavalinState].
      *
      * @return the [CompletableFuture] used to write the seekable stream
      */
@@ -338,28 +409,19 @@ interface Context {
      * Utility function that allows to run async task on top of the [Context.future] method.
      * It means you should treat provided task as a result of this handler, and you can't use any other result function simultaneously.
      *
-     * @param executor Thread-pool used to execute the given task,
-     * You can change this default in [io.javalin.config.JavalinConfig].
-     *
-     * @param timeout Timeout in milliseconds,
-     * by default it's 0 which means timeout watcher is disabled.
-     *
-     * @param onTimeout Timeout listener executed when [TimeoutException] is thrown in specified task.
-     * This timeout listener is a part of request lifecycle, so you can still modify context here.
+     * @param config Configuration of the async task with properties like executor, timeout, etc.
+     * @param task The task that will be executed asynchronously.
      *
      * @return As a result, function returns a new future that you can listen to.
      * The limitation is that you can't modify context after such event,
      * because it'll most likely be executed when the connection is already closed,
      * so it's just not thread-safe.
      */
-    fun async(executor: ExecutorService? = null, timeout: Long = 0L, onTimeout: Runnable?, task: ThrowingRunnable<Exception>) =
-        AsyncUtil.submitAsyncTask(this, executor, timeout, onTimeout, task)
-
-    /** @see [async] */
-    fun async(timeout: Long, onTimeout: Runnable? = null, task: ThrowingRunnable<Exception>) = async(executor = null, timeout = timeout, onTimeout = onTimeout, task = task)
+    fun async(config: Consumer<AsyncTaskConfig>, task: ThrowingRunnable<Exception>) =
+        appData(AsyncExecutorKey).submitAsyncTask(this, AsyncTaskConfig().also { config.accept(it) }, task)
 
     /* @see [async] */
-    fun async(task: ThrowingRunnable<Exception>) = async(onTimeout = null, task = task)
+    fun async(task: ThrowingRunnable<Exception>) = async(config = {}, task = task)
 
     /**
      * The main entrypoint for all async related functionalities exposed by [Context].
@@ -381,10 +443,16 @@ interface Context {
     /** Sets response header by name and value. */
     fun header(name: String, value: String): Context = also { res().setHeader(name, value) }
 
-    /** Redirects to location with given status. Skips HTTP handler if called in before-handler */
+    /** Adds a response header with the given name and value. Unlike [header] which overwrites, this adds an additional value. */
+    fun addHeader(name: String, value: String): Context = also { res().addHeader(name, value) }
+
+    /** Remove header by name. */
+    fun removeHeader(name: String): Context = also { res().setHeader(name, null) }
+
+    /** Redirects to location with given status. Skips HTTP handler if called in before/beforeMatched handler */
     fun redirect(location: String, status: HttpStatus)
 
-    /** Redirects to location with status [HttpStatus.FOUND]. Skips HTTP handler if called in before-handler */
+    /** Redirects to location with status [HttpStatus.FOUND]. Skips HTTP handler if called in before/beforeMatched handler */
     fun redirect(location: String) = redirect(location, HttpStatus.FOUND)
 
     /** Sets the response status. */
@@ -418,7 +486,7 @@ interface Context {
      * Serializes object to a JSON-string using the registered [io.javalin.json.JsonMapper] and sets it as the context result.
      * Also sets content type to application/json.
      */
-    fun json(obj: Any, type: Type): Context = contentType(ContentType.APPLICATION_JSON).result(jsonMapper().toJsonString(obj, type))
+    fun json(obj: Any, type: Type): Context = contentType(APPLICATION_JSON).result(jsonMapper().toJsonString(obj, type))
 
     /** @see [json] */
     fun json(obj: Any): Context = json(obj, obj::class.java)
@@ -427,7 +495,7 @@ interface Context {
      * Serializes object to a JSON-stream using the registered [io.javalin.json.JsonMapper] and sets it as the context result.
      * Also sets content type to application/json.
      */
-    fun jsonStream(obj: Any, type: Type): Context = contentType(ContentType.APPLICATION_JSON).result(jsonMapper().toJsonStream(obj, type))
+    fun jsonStream(obj: Any, type: Type): Context = contentType(APPLICATION_JSON).result(jsonMapper().toJsonStream(obj, type))
 
     /** @see [jsonStream] */
     fun jsonStream(obj: Any): Context = jsonStream(obj, obj::class.java)
@@ -436,10 +504,10 @@ interface Context {
      * Consumes the specified stream with the configured JsonMapper, which transforms the stream's
      * content to JSON, writing the results directly to the response's `outputStream` as the stream
      * is consumed. This function call is synchronous, and may be wrapped in `ctx.async { }` if needed.
+     * The response will always be compressed regardless of size, given that compression is enabled in
+     * the Javalin configuration.
      */
-    fun writeJsonStream(stream: Stream<*>) = jsonMapper().writeToOutputStream(
-        stream, this.contentType(ContentType.APPLICATION_JSON).outputStream()
-    )
+    fun writeJsonStream(stream: Stream<*>)
 
     /** Sets context result to specified html string and sets content-type to text/html. */
     fun html(html: String): Context = contentType(ContentType.TEXT_HTML).result(html)
@@ -449,7 +517,7 @@ interface Context {
      * Also sets content-type to text/html.
      * Determines the correct rendering-function based on the file extension.
      */
-    fun render(filePath: String, model: Map<String, Any?>): Context = html(fileRenderer().render(filePath, model, this))
+    fun render(filePath: String, model: Map<String, Any?>): Context = html(appData(FileRendererKey).render(filePath, model, this))
 
     /** @see render() */
     fun render(filePath: String): Context = render(filePath, mutableMapOf())
@@ -459,6 +527,8 @@ interface Context {
     ///////////////////////////////////////////////////////////////
 
     fun skipRemainingHandlers(): Context
+
+    fun routeRoles(): Set<RouteRole>
 
 }
 
@@ -475,16 +545,22 @@ inline fun <reified T : Any> Context.bodyAsClass(): T = bodyAsClass(typeOf<T>().
 inline fun <reified T : Any> Context.bodyStreamAsClass(): T = bodyStreamAsClass(typeOf<T>().javaType)
 
 /** Reified version of [Context.bodyValidator] (Kotlin only) */
-inline fun <reified T : Any> Context.bodyValidator(): BodyValidator<T> = bodyValidator(T::class.java)
+inline fun <reified T : Any> Context.bodyValidator(): BodyValidator<T?> = bodyValidator(T::class.java)
 
 /** Reified version of [Context.pathParamAsClass] (Kotlin only) */
-inline fun <reified T : Any> Context.pathParamAsClass(key: String): Validator<T> = pathParamAsClass(key, T::class.java)
+inline fun <reified T : Any> Context.pathParamAsClass(key: String): Validator<T?> = pathParamAsClass(key, T::class.java)
 
 /** Reified version of [Context.headerAsClass] (Kotlin only) */
-inline fun <reified T : Any> Context.headerAsClass(header: String): Validator<T> = headerAsClass(header, T::class.java)
+inline fun <reified T : Any> Context.headerAsClass(header: String): Validator<T?> = headerAsClass(header, T::class.java)
 
 /** Reified version of [Context.queryParamAsClass] (Kotlin only) */
-inline fun <reified T : Any> Context.queryParamAsClass(key: String): Validator<T> = queryParamAsClass(key, T::class.java)
+inline fun <reified T : Any> Context.queryParamAsClass(key: String): Validator<T?> = queryParamAsClass(key, T::class.java)
+
+/** Reified version of [Context.queryParamsAsClass] (Kotlin only) */
+inline fun <reified T : Any> Context.queryParamsAsClass(key: String): Validator<List<T>?> = queryParamsAsClass(key, T::class.java)
 
 /** Reified version of [Context.formParamAsClass] (Kotlin only) */
-inline fun <reified T : Any> Context.formParamAsClass(key: String): Validator<T> = formParamAsClass(key, T::class.java)
+inline fun <reified T : Any> Context.formParamAsClass(key: String): Validator<T?> = formParamAsClass(key, T::class.java)
+
+/** Reified version of [Context.formParamsAsClass] (Kotlin only) */
+inline fun <reified T : Any> Context.formParamsAsClass(key: String): Validator<List<T>?> = formParamsAsClass(key, T::class.java)

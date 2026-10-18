@@ -6,52 +6,70 @@
 
 package io.javalin.http.util
 
+import io.javalin.config.MultipartConfig
 import io.javalin.http.UploadedFile
+import io.javalin.http.servlet.JavalinServletRequest
+import io.javalin.util.BodyAlreadyReadException
 import jakarta.servlet.MultipartConfigElement
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.Part
-import java.nio.charset.Charset
+import kotlin.text.Charsets.UTF_8
 
 object MultipartUtil {
+
     const val MULTIPART_CONFIG_ATTRIBUTE = "org.eclipse.jetty.multipartConfig"
+
     private val defaultConfig = MultipartConfigElement(System.getProperty("java.io.tmpdir"), -1, -1, 1)
 
-    var preUploadFunction: (HttpServletRequest) -> Unit = { req ->
-        if (req.getAttribute(MULTIPART_CONFIG_ATTRIBUTE) == null) {
-            req.setAttribute(MULTIPART_CONFIG_ATTRIBUTE, defaultConfig)
+    private inline fun <R> HttpServletRequest.processParts(multipartConfig: MultipartConfig, body: (Sequence<Part>, Int) -> R): R {
+        if ((this as JavalinServletRequest).inputStreamRead) {
+            throw BodyAlreadyReadException("Request body has already been consumed. You cannot get multipart parts after reading the request body.")
         }
+        // Apply multipart configuration if not already set
+        if (getAttribute(MULTIPART_CONFIG_ATTRIBUTE) == null) {
+            setAttribute(MULTIPART_CONFIG_ATTRIBUTE, multipartConfig.multipartConfigElement())
+        }
+        val parts = this.parts
+        return body(parts.asSequence(), parts.size)
     }
 
-    fun getUploadedFiles(req: HttpServletRequest, partName: String): List<UploadedFile> {
-        preUploadFunction(req)
-        return req.parts.filter { isFile(it) && it.name == partName }.map { UploadedFile(it) }
-    }
+    fun uploadedFiles(req: HttpServletRequest, partName: String, multipartConfig: MultipartConfig): List<UploadedFile> =
+        req.processParts(multipartConfig) { parts, size ->
+            parts
+                .filter { isFile(it) && it.name == partName }
+                .mapTo(ArrayList(size)) { UploadedFile(it) }
+        }
 
-    fun getUploadedFiles(req: HttpServletRequest): List<UploadedFile> {
-        preUploadFunction(req)
-        return req.parts.filter(this::isFile).map { UploadedFile(it) }
-    }
+    fun uploadedFiles(req: HttpServletRequest, multipartConfig: MultipartConfig): List<UploadedFile> =
+        req.processParts(multipartConfig) { parts, size ->
+            parts
+                .filter(::isFile)
+                .mapTo(ArrayList(size)) { UploadedFile(it) }
+        }
 
-    fun getUploadedFileMap(req: HttpServletRequest): Map<String, List<UploadedFile>> {
-        preUploadFunction(req)
-        return req
-            .parts
-            .filter(this::isFile)
-            .groupBy { it.name }
-            .mapValues { entry -> entry.value.map { UploadedFile(it) } }
-    }
+    fun uploadedFileMap(req: HttpServletRequest, multipartConfig: MultipartConfig): Map<String, List<UploadedFile>> =
+        req.processParts(multipartConfig) { parts, size ->
+            parts
+                .filter(::isFile)
+                .groupByTo(HashMap(size), { it.name }, { UploadedFile(it) })
+        }
 
-    fun getFieldMap(req: HttpServletRequest): Map<String, List<String>> {
-        preUploadFunction(req)
-        return req.parts.associate { part -> part.name to getPartValue(req, part.name) }
-    }
+    fun fieldMap(req: HttpServletRequest, multipartConfig: MultipartConfig): Map<String, List<String>> =
+        req.processParts(multipartConfig) { parts, size ->
+            parts.associateTo(HashMap(size)) { it.name to getPartValue(req, it.name, multipartConfig) }
+        }
 
-    private fun getPartValue(req: HttpServletRequest, partName: String): List<String> {
-        return req.parts.filter { isField(it) && it.name == partName }.map { part ->
-            part.inputStream.use { it.readBytes().toString(Charset.forName("UTF-8")) }
-        }.toList()
-    }
+    private fun getPartValue(req: HttpServletRequest, partName: String, multipartConfig: MultipartConfig): List<String> =
+        req.processParts(multipartConfig) { parts, size ->
+            parts
+                .filter { isField(it) && it.name == partName }
+                .mapTo(ArrayList(size)) { part -> part.inputStream.use { it.readBytes().toString(UTF_8) } }
+        }
 
-    private fun isField(filePart: Part) = filePart.submittedFileName == null // this is what Apache FileUpload does ...
-    private fun isFile(filePart: Part) = !isField(filePart)
+    private fun isField(filePart: Part): Boolean =
+        filePart.submittedFileName == null // this is what Apache FileUpload does
+
+    private fun isFile(filePart: Part): Boolean =
+        !isField(filePart)
+
 }

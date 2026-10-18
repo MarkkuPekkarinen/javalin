@@ -6,22 +6,42 @@ import jakarta.servlet.ServletOutputStream
 import jakarta.servlet.WriteListener
 import java.io.OutputStream
 
-internal class CompressedOutputStream(val compression: CompressionStrategy, val ctx: Context) : ServletOutputStream() {
+internal class CompressedOutputStream(
+    val minSizeForCompression: Int,
+    val compression: CompressionStrategy,
+    val ctx: Context,
+) : ServletOutputStream() {
 
     private val originStream = ctx.res().outputStream
     private var compressedStream: OutputStream? = null
+    private var isCompressionDecisionMade = false
 
-    override fun write(bytes: ByteArray, offset: Int, length: Int) {
-        if (compressedStream == null && length >= compression.minSizeForCompression && compression.allowsForCompression(ctx.res().contentType) && !ctx.res().containsHeader(Header.CONTENT_ENCODING)) {
-            tryMatchCompression(compression, ctx)?.also {
-                this.compressedStream = it.compress(originStream)
-                ctx.header(Header.CONTENT_ENCODING, it.encoding())
+    private fun maybeCreateCompressionStreamOnFirstWrite(length: Int) {
+        if (!isCompressionDecisionMade) {
+            val isCompressionAllowed = !ctx.res().containsHeader(Header.CONTENT_ENCODING) &&
+                compression.allowsForCompression(ctx.res().contentType)
+            val isCompressionDesired = length >= minSizeForCompression
+            if (isCompressionAllowed && isCompressionDesired) {
+                compression.findMatchingCompressor(ctx.header(Header.ACCEPT_ENCODING) ?: "")?.also {
+                    this.compressedStream = it.compress(originStream)
+                    ctx.header(Header.CONTENT_ENCODING, it.encoding())
+                    ctx.res().setHeader(Header.CONTENT_LENGTH, null) // compressed size is unknown, drop any preset length
+                }
             }
+            isCompressionDecisionMade = true
         }
-        (compressedStream ?: originStream).write(bytes, offset, length) // fall back to default stream if no compression
     }
 
-    override fun write(byte: Int) = originStream.write(byte)
+    override fun write(bytes: ByteArray, offset: Int, length: Int) {
+        maybeCreateCompressionStreamOnFirstWrite(length)
+        (compressedStream ?: originStream).write(bytes, offset, length)
+    }
+
+    override fun write(byte: Int) {
+        maybeCreateCompressionStreamOnFirstWrite(1)
+        (compressedStream ?: originStream).write(byte)
+    }
+
     override fun setWriteListener(writeListener: WriteListener?) = originStream.setWriteListener(writeListener)
     override fun isReady(): Boolean = originStream.isReady
     override fun close() {
@@ -30,15 +50,8 @@ internal class CompressedOutputStream(val compression: CompressionStrategy, val 
 
 }
 
-private fun tryMatchCompression(
-    compression: CompressionStrategy,
-    ctx: Context,
-): Compressor? =
-    ctx.header(Header.ACCEPT_ENCODING)?.let { acceptedEncoding ->
-        compression.compressors.firstOrNull { acceptedEncoding.contains(it.encoding(), ignoreCase = true) }
-    }
-
 
 private fun CompressionStrategy.allowsForCompression(contentType: String?): Boolean =
-    contentType == null || excludedMimeTypesFromCompression.none { excluded -> contentType.contains(excluded, ignoreCase = true) }
-
+    contentType == null || allowedMimeTypes.contains(contentType) || excludedMimeTypes.none { excluded ->
+        contentType.contains(excluded, ignoreCase = true)
+    }

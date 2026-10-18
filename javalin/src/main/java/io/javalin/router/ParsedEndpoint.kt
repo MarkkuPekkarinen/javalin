@@ -1,0 +1,32 @@
+package io.javalin.router
+
+import io.javalin.config.RouterConfig
+import io.javalin.http.servlet.JavalinServletContext
+import io.javalin.router.matcher.PathParser
+
+class ParsedEndpoint(
+    @JvmField val endpoint: Endpoint,
+    private val routerConfig: RouterConfig,
+) {
+
+    private val pathParser = PathParser(endpoint.path, routerConfig)
+
+    fun handle(ctx: JavalinServletContext, requestUri: String) {
+        handleWithPathParams(ctx, extractPathParams(requestUri))
+    }
+
+    internal fun handleWithPathParams(ctx: JavalinServletContext, pathParams: Map<String, String>) {
+        val updatedCtx = ctx.update(endpoint, pathParams)
+        when (val handlerWrapper = routerConfig.handlerWrapper) {
+            null -> endpoint.handler.handle(updatedCtx)
+            else -> handlerWrapper.wrap(endpoint).handle(updatedCtx)
+        }
+    }
+
+    fun matches(requestUri: String): Boolean =
+        pathParser.matches(requestUri)
+
+    fun extractPathParams(requestUri: String): Map<String, String> =
+        pathParser.extractPathParams(requestUri)
+
+}

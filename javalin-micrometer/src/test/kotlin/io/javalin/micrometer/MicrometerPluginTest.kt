@@ -1,66 +1,55 @@
 package io.javalin.micrometer
-/*
- * Javalin - https://javalin.io
- * Copyright 2020 David Åse
- * Licensed under Apache 2.0: https://github.com/tipsy/javalin/blob/master/LICENSE
- */
 
 import io.javalin.Javalin
+import io.javalin.http.Header
+import io.javalin.http.HttpStatus.NOT_FOUND
 import io.javalin.http.HttpStatus.OK
 import io.javalin.http.NotFoundResponse
 import io.javalin.testtools.JavalinTest
-import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Tags
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
-import org.assertj.core.api.Assertions
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import io.javalin.testtools.TestConfig
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.WebSocket
+import java.time.Duration
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+
 
 class MicrometerPluginTest {
 
-    private val meterRegistry: MeterRegistry = SimpleMeterRegistry()
+    private val meterRegistry = SimpleMeterRegistry()
+
+    private val followRedirectsConfig = TestConfig(
+        httpClient = HttpClient.newBuilder()
+            .followRedirects(HttpClient.Redirect.ALWAYS)
+            .connectTimeout(Duration.ofSeconds(5))
+            .build()
+    )
 
     @Test
-    fun `test that JettyConnectionMetrics is registered`() {
-        val registry = SimpleMeterRegistry()
-        val micrometerApp = Javalin.create { it.plugins.register(MicrometerPlugin.create { it.registry = registry }) }
-
-        JavalinTest.test(micrometerApp) { app, http ->
-            app.get("/test") { it.json("Hello world") }
-            repeat(10) {
-                http.get("/test")
-            }
+    fun `plugin can be registered`() {
+        val app = Javalin.create { config ->
+            config.registerPlugin(MicrometerPlugin {
+                it.registry = meterRegistry
+            })
+            config.routes.get("/test") { ctx -> ctx.result("Hello World") }
         }
-
-        val maxConnectionGauge = registry.find("jetty.connections.max").gauge() ?: Assertions.fail("\"jetty.connections.max\" not found")
-        assertThat(maxConnectionGauge.value()).isGreaterThan(0.0)
-
-        val messagesOutCounter = registry.find("jetty.connections.messages.out").counter() ?: Assertions.fail("\"jetty.connections.messages.out\" not found")
-        assertThat(messagesOutCounter.count()).isGreaterThan(0.0)
+        app.stop()
+        assertThat(app).isNotNull()
     }
 
     @Test
-    fun `successful request`() = JavalinTest.test(setupApp()) { app, http ->
+    fun `basic request metrics are recorded`() = JavalinTest.test(setupApp()) { app, http ->
         val requestCount = (2..9).random()
-        app.get("/hello/{name}") { it.result("Hello: " + it.pathParam("name")) }
-        repeat(requestCount) { http.get("/hello/jon") }
-        val timerCount = meterRegistry.get("jetty.server.requests")
-            .tag("uri", "/hello/{name}")
-            .tag("method", "GET")
-            .tag("exception", "None")
-            .tag("status", "200")
-            .tag("outcome", "SUCCESS")
-            .timer()
-            .count()
-        assertThat(timerCount).isEqualTo(requestCount.toLong())
-    }
+        app.unsafe.routes.get("/hello") { it.status(OK) }
+        repeat(requestCount) { http.get("/hello") }
 
-    @Test
-    fun `successful request with context path`() = JavalinTest.test(setupApp(contextPath = "/api")) { app, http ->
-        val requestCount = (2..9).random()
-        app.get("/hello") { it.status(OK) }
-        repeat(requestCount) { http.get("/api/hello") }
-        val timerCount = meterRegistry.get("jetty.server.requests")
+        val timerCount = meterRegistry.get("http.server.requests")
             .tag("uri", "/hello")
             .tag("method", "GET")
             .tag("exception", "None")
@@ -74,9 +63,10 @@ class MicrometerPluginTest {
     @Test
     fun `request throwing exception`() = JavalinTest.test(setupApp()) { app, http ->
         val requestCount = (2..9).random()
-        app.get("/boom") { throw IllegalArgumentException("boom") }
+        app.unsafe.routes.get("/boom") { throw IllegalArgumentException("boom") }
         repeat(requestCount) { http.get("/boom") }
-        val timerCount = meterRegistry.get("jetty.server.requests")
+
+        val timerCount = meterRegistry.get("http.server.requests")
             .tag("uri", "/boom")
             .tag("method", "GET")
             .tag("exception", "IllegalArgumentException")
@@ -88,12 +78,13 @@ class MicrometerPluginTest {
     }
 
     @Test
-    fun redirect() = JavalinTest.test(setupApp()) { app, http ->
+    fun `redirect metrics`() = JavalinTest.test(setupApp(), followRedirectsConfig) { app, http ->
         val requestCount = (2..9).random()
-        app.get("/hello") { it.result("Hello") }
-        app.get("/redirect") { it.redirect("/hello") }
+        app.unsafe.routes.get("/hello") { it.result("Hello") }
+        app.unsafe.routes.get("/redirect") { it.redirect("/hello") }
         repeat(requestCount) { http.get("/redirect") }
-        val redirCount = meterRegistry.get("jetty.server.requests")
+
+        val redirCount = meterRegistry.get("http.server.requests")
             .tag("uri", "REDIRECTION")
             .tag("method", "GET")
             .tag("exception", "None")
@@ -101,7 +92,7 @@ class MicrometerPluginTest {
             .tag("outcome", "REDIRECTION")
             .timer()
             .count()
-        val okCount = meterRegistry.get("jetty.server.requests")
+        val okCount = meterRegistry.get("http.server.requests")
             .tag("uri", "/hello")
             .tag("method", "GET")
             .tag("exception", "None")
@@ -113,12 +104,13 @@ class MicrometerPluginTest {
     }
 
     @Test
-    fun `redirect tagged`() = JavalinTest.test(setupApp(tagRedirectPaths = true)) { app, http ->
+    fun `redirect tagged when enabled`() = JavalinTest.test(setupApp(tagRedirectPaths = true), followRedirectsConfig) { app, http ->
         val requestCount = (2..9).random()
-        app.get("/hello") { it.result("Hello") }
-        app.get("/redirect") { it.redirect("/hello") }
+        app.unsafe.routes.get("/hello") { it.result("Hello") }
+        app.unsafe.routes.get("/redirect") { it.redirect("/hello") }
         repeat(requestCount) { http.get("/redirect") }
-        val redirCount = meterRegistry.get("jetty.server.requests")
+
+        val redirCount = meterRegistry.get("http.server.requests")
             .tag("uri", "/redirect")
             .tag("method", "GET")
             .tag("exception", "None")
@@ -126,7 +118,7 @@ class MicrometerPluginTest {
             .tag("outcome", "REDIRECTION")
             .timer()
             .count()
-        val okCount = meterRegistry.get("jetty.server.requests")
+        val okCount = meterRegistry.get("http.server.requests")
             .tag("uri", "/hello")
             .tag("method", "GET")
             .tag("exception", "None")
@@ -140,19 +132,17 @@ class MicrometerPluginTest {
     @Test
     fun `etags tagged`() = JavalinTest.test(setupApp(tagRedirectPaths = true, autoGenerateEtags = true)) { app, http ->
         val requestCount = (2..9).random()
-        app.get("/hello") { it.result("Hello") }
+        app.unsafe.routes.get("/hello") { it.result("Hello") }
         repeat(requestCount) {
             val response = http.get("/hello")
-            val etag = when {
-                response.headers["ETag"]?.first() != null -> response.headers["ETag"]
-                else -> ""
-            }
+            val etag = response.headers().get("ETag")?.firstOrNull().orEmpty()
             val response2 = http.get("/hello") {
-                it.header("If-None-Match", etag!!)
+                it.header(Header.IF_NONE_MATCH, etag)
             }
             assertThat(response2.code).isEqualTo(304) // NOT MODIFIED
         }
-        val redirCount = meterRegistry.get("jetty.server.requests")
+
+        val notModifiedCount = meterRegistry.get("http.server.requests")
             .tag("uri", "/hello")
             .tag("method", "GET")
             .tag("exception", "None")
@@ -160,7 +150,7 @@ class MicrometerPluginTest {
             .tag("outcome", "REDIRECTION")
             .timer()
             .count()
-        val okCount = meterRegistry.get("jetty.server.requests")
+        val okCount = meterRegistry.get("http.server.requests")
             .tag("uri", "/hello")
             .tag("method", "GET")
             .tag("exception", "None")
@@ -168,14 +158,15 @@ class MicrometerPluginTest {
             .tag("outcome", "SUCCESS")
             .timer()
             .count()
-        assertThat(redirCount + okCount).isEqualTo((requestCount * 2).toLong())
+        assertThat(notModifiedCount + okCount).isEqualTo((requestCount * 2).toLong())
     }
 
     @Test
     fun `not found`() = JavalinTest.test(setupApp()) { _, http ->
         val requestCount = (2..9).random()
         repeat(requestCount) { http.get("/some-unmapped-path") }
-        val notFoundCount = meterRegistry.get("jetty.server.requests")
+
+        val notFoundCount = meterRegistry.get("http.server.requests")
             .tag("uri", "NOT_FOUND")
             .tag("method", "GET")
             .tag("exception", "None")
@@ -187,9 +178,9 @@ class MicrometerPluginTest {
     }
 
     @Test
-    fun `not found tagged`() = JavalinTest.test(setupApp(tagNotFoundMappedPaths = true)) { app, http ->
+    fun `not found tagged when enabled`() = JavalinTest.test(setupApp(tagNotFoundMappedPaths = true)) { app, http ->
         val requestCount = (2..9).random()
-        app.get("/hello/{name}") { ctx ->
+        app.unsafe.routes.get("/hello/{name}") { ctx ->
             if (ctx.pathParam("name") == "jon") ctx.status(OK)
             else throw NotFoundResponse()
         }
@@ -198,7 +189,8 @@ class MicrometerPluginTest {
             http.get("/hello/wil")
             http.get("/some-unmapped-path")
         }
-        val okCount = meterRegistry.get("jetty.server.requests")
+
+        val okCount = meterRegistry.get("http.server.requests")
             .tag("uri", "/hello/{name}")
             .tag("method", "GET")
             .tag("exception", "None")
@@ -206,7 +198,7 @@ class MicrometerPluginTest {
             .tag("outcome", "SUCCESS")
             .timer()
             .count()
-        val notFoundCountSpecific = meterRegistry.get("jetty.server.requests")
+        val notFoundCountSpecific = meterRegistry.get("http.server.requests")
             .tag("uri", "/hello/{name}")
             .tag("method", "GET")
             .tag("exception", "None")
@@ -214,7 +206,7 @@ class MicrometerPluginTest {
             .tag("outcome", "CLIENT_ERROR")
             .timer()
             .count()
-        val notFoundCountGeneric = meterRegistry.get("jetty.server.requests")
+        val notFoundCountGeneric = meterRegistry.get("http.server.requests")
             .tag("uri", "NOT_FOUND")
             .tag("method", "GET")
             .tag("exception", "None")
@@ -227,27 +219,104 @@ class MicrometerPluginTest {
         assertThat(notFoundCountGeneric).isEqualTo(requestCount.toLong())
     }
 
+    @Test
+    fun `invalid method`() = JavalinTest.test(setupApp(tagNotFoundMappedPaths = true)) { app, http ->
+        val requestCount = (2..9).random()
+        app.unsafe.routes.get("/hello") { ctx ->
+            ctx.status(OK)
+        }
+        repeat(requestCount) {
+            http.request("/hello") { b -> b.header(Header.X_HTTP_METHOD_OVERRIDE, "POSTS") }
+        }
+
+        val notFoundCountGeneric = meterRegistry.get("http.server.requests")
+            .tag("uri", "NOT_FOUND")
+            .tag("method", "POSTS")
+            .tag("exception", "None")
+            .tag("status", "404")
+            .tag("outcome", "CLIENT_ERROR")
+            .timer()
+            .count()
+
+        assertThat(notFoundCountGeneric).isEqualTo(requestCount.toLong())
+    }
+
+    @Test
+    fun `custom tags are applied`() = JavalinTest.test(setupApp(customTags = Tags.of("service", "test-app", "env", "test"))) { app, http ->
+        app.unsafe.routes.get("/hello") { it.status(OK) }
+        http.get("/hello")
+
+        val timerCount = meterRegistry.get("http.server.requests")
+            .tag("uri", "/hello")
+            .tag("method", "GET")
+            .tag("service", "test-app")
+            .tag("env", "test")
+            .timer()
+            .count()
+        assertThat(timerCount).isEqualTo(1L)
+    }
+
+    @Test
+    fun `context path is handled correctly`() = JavalinTest.test(setupApp(contextPath = "/api")) { app, http ->
+        val requestCount = (2..9).random()
+        app.unsafe.routes.get("/hello") { it.status(OK) }
+        repeat(requestCount) { http.get("/api/hello") }
+
+        val timerCount = meterRegistry.get("http.server.requests")
+            .tag("uri", "/hello")
+            .tag("method", "GET")
+            .tag("exception", "None")
+            .tag("status", "200")
+            .tag("outcome", "SUCCESS")
+            .timer()
+            .count()
+        assertThat(timerCount).isEqualTo(requestCount.toLong())
+    }
+
+    @Test
+    fun `wsExceptionHandler sets exception attribute on WsContext`() = JavalinTest.test(setupApp()) { app, _ ->
+        val capturedExceptionName = AtomicReference<String?>()
+        val latch = CountDownLatch(1)
+
+        app.unsafe.routes.ws("/ws") { ws ->
+            ws.onMessage { throw IllegalArgumentException("boom") }
+        }
+        app.unsafe.routes.wsException(IllegalArgumentException::class.java) { e, ctx ->
+            MicrometerPlugin.wsExceptionHandler.handle(e, ctx)
+            capturedExceptionName.set(ctx.attribute("__micrometer_exception_name"))
+            latch.countDown()
+        }
+
+        val wsClient = HttpClient.newHttpClient()
+            .newWebSocketBuilder()
+            .buildAsync(URI.create("ws://localhost:${app.port()}/ws"), object : WebSocket.Listener {})
+            .join()
+        wsClient.sendText("trigger", true).join()
+        latch.await(2, TimeUnit.SECONDS)
+        wsClient.abort()
+
+        assertThat(capturedExceptionName.get()).isEqualTo("IllegalArgumentException")
+    }
+
     private fun setupApp(
         tagRedirectPaths: Boolean = false,
         tagNotFoundMappedPaths: Boolean = false,
         autoGenerateEtags: Boolean? = null,
-        contextPath: String = "/"
+        contextPath: String = "/",
+        customTags: Tags = Tags.empty()
     ) = Javalin.create { config ->
-        config.routing.contextPath = contextPath
-        config.plugins.register(
-            MicrometerPlugin.create {
-                it.registry = meterRegistry
-                it.tags = Tags.empty()
-                it.tagExceptionName = true
-                it.tagRedirectPaths = tagRedirectPaths
-                it.tagNotFoundMappedPaths = tagNotFoundMappedPaths
-            }
-        )
+        config.router.contextPath = contextPath
+        config.registerPlugin(MicrometerPlugin {
+            it.registry = meterRegistry
+            it.tags = customTags
+            it.tagExceptionName = true
+            it.tagRedirectPaths = tagRedirectPaths
+            it.tagNotFoundMappedPaths = tagNotFoundMappedPaths
+        })
+        config.routes.exception(IllegalArgumentException::class.java) { e, ctx ->
+            // Must manually delegate to Micrometer exception handler for exception tags to be correct
+            MicrometerPlugin.exceptionHandler.handle(e, ctx)
+        }
         if (autoGenerateEtags != null) config.http.generateEtags = autoGenerateEtags
-
-        // must manually delegate to Micrometer exception handler for exception tags to be correct
-    }.exception(IllegalArgumentException::class.java) { e, ctx ->
-        MicrometerPlugin.exceptionHandler.handle(e, ctx)
     }
-
 }

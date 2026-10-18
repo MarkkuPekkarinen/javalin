@@ -10,26 +10,23 @@ import io.javalin.Javalin
 import io.javalin.apibuilder.ApiBuilder.get
 import io.javalin.apibuilder.ApiBuilder.patch
 import io.javalin.apibuilder.ApiBuilder.post
+import io.javalin.plugin.bundled.CorsPlugin
 
 fun main() {
-
-    val corsApp = Javalin.create {
-        it.plugins.enableCors { cors ->
-            cors.add {
+    Javalin.create { cfg ->
+        cfg.registerPlugin(CorsPlugin { cors ->
+            cors.addRule {
                 it.allowHost("http://localhost:7001/", "http://localhost:7002")
             }
+        })
+        cfg.routes.apiBuilder {
+            get { it.json("Hello Get") }
+            post { it.json("Hello Post") }
+            patch { it.json("Hello Patch") }
         }
     }.start(7070)
 
-    corsApp.routes {
-        get { it.json("Hello Get") }
-        post { it.json("Hello Post") }
-        patch { it.json("Hello Patch") }
-    }
-
-    Javalin.create().start(7001).get("/") { it.html("Try some CORS") }
-    Javalin.create().start(7002).get("/") { it.html("Try some CORS") }
-    Javalin.create().start(7003).get("/") { it.html("No CORS here") }
-
+    Javalin.create { it.routes.get("/") { it.html("Try some CORS") } }.start(7001)
+    Javalin.create { it.routes.get("/") { it.html("Try some CORS") } }.start(7002)
+    Javalin.create { it.routes.get("/") { it.html("No CORS here") } }.start(7003)
 }
-
